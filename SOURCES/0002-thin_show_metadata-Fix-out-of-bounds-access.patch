@@ -1,0 +1,26 @@
+From 691a0237809b5364117446a8a9b0cceeb0a747c1 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 1 Jun 2021 11:24:11 +0800
+Subject: [PATCH 02/10] [thin_show_metadata] Fix out-of-bounds access
+
+---
+ thin-provisioning/thin_show_metadata.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/thin-provisioning/thin_show_metadata.cc b/thin-provisioning/thin_show_metadata.cc
+index bdbab3f..dbc7a80 100644
+--- a/thin-provisioning/thin_show_metadata.cc
++++ b/thin-provisioning/thin_show_metadata.cc
+@@ -206,7 +206,8 @@ namespace {
+ 
+ 		void run() {
+ 			auto line_length = 80;
+-			for (block_address b = 0; b < 2000; b++) {
++			block_address nr_blocks = std::min<block_address>(2000, bm_.get_nr_blocks());
++			for (block_address b = 0; b < nr_blocks; b++) {
+ 				block_manager::read_ref rr = bm_.read_lock(b);
+ 
+ 				if (!(b % line_length)) {
+-- 
+1.8.3.1
+

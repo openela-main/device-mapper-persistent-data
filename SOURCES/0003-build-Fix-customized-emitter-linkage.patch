@@ -1,0 +1,25 @@
+From 65369d88610069ba7bbd011b00af19523638b0fb Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 1 Jun 2021 13:32:26 +0800
+Subject: [PATCH 03/10] [build] Fix customized emitter linkage
+
+---
+ contrib/Makefile.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/contrib/Makefile.in b/contrib/Makefile.in
+index 038c41c..7192258 100644
+--- a/contrib/Makefile.in
++++ b/contrib/Makefile.in
+@@ -18,7 +18,7 @@ contrib/%.a: contrib/%.o
+ 	$(V)echo "    [AR] $@"
+ 	$(V)$(AR) rcs $@ $^
+ 
+-contrib/%.so: contrib/%.a
++contrib/%.so: contrib/%.o
+ 	$(V)echo "    [LD] $@"
+ 	$(V)$(CC) -shared -Wl,-soname,$@ -o $@ $<
+ 
+-- 
+1.8.3.1
+

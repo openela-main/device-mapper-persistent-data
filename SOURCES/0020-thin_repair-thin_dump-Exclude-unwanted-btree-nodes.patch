@@ -1,0 +1,25 @@
+From 54ea2ba0098a5fbacf0b8f4fc5f9e4aa13e4b743 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 24 Aug 2021 20:59:47 +0800
+Subject: [PATCH] [thin_repair/thin_dump] Exclude unwanted btree nodes
+
+---
+ thin-provisioning/metadata_dumper.cc | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/thin-provisioning/metadata_dumper.cc b/thin-provisioning/metadata_dumper.cc
+index 0ca4afed..ffdeb04c 100644
+--- a/thin-provisioning/metadata_dumper.cc
++++ b/thin-provisioning/metadata_dumper.cc
+@@ -597,6 +597,8 @@ namespace {
+ 
+ 					info.nr_mappings = n.get_nr_entries();
+ 				}
++			} else {
++				fail(info, "not the value size of interest");
+ 			}
+ 
+ 			return info;
+-- 
+2.34.3
+

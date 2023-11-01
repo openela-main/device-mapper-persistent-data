@@ -1,0 +1,197 @@
+From 637fc5ec0869145d1b5272ee0e1e51e21517be79 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Mon, 7 Jun 2021 14:54:04 +0800
+Subject: [PATCH] [thin] Clear superblock flags in restored metadata
+
+The needs_check flag is unnecessary for a restored metadata since
+it is assumed clean and has no errors
+
+(cherry picked from commit 62536defc86f12363e4178ee5a2cefc40fa416d9)
+---
+ ft-lib/bcache.c                            | 20 ++++++++++---
+ functional-tests/thin-functional-tests.scm | 46 ++++++++++++++++++++++++++++++
+ functional-tests/thin/xml.scm              |  4 +--
+ thin-provisioning/restore_emitter.cc       |  2 +-
+ 4 files changed, 65 insertions(+), 7 deletions(-)
+
+diff --git a/ft-lib/bcache.c b/ft-lib/bcache.c
+index ee5b6c5..1c63377 100644
+--- a/ft-lib/bcache.c
++++ b/ft-lib/bcache.c
+@@ -201,8 +201,10 @@ static int engine_issue(struct io_engine *e, int fd, enum dir d,
+ 
+ 	cb_array[0] = &cb->cb;
+ 	r = io_submit(e->aio_context, 1, cb_array);
+-	if (r < 0)
++	if (r < 0) {
++		warn("io_submit failed, ret=%d\n", r);
+ 		cb_free(e->cbs, cb);
++	}
+ 
+ 	return r;
+ }
+@@ -219,7 +221,7 @@ static int engine_wait(struct io_engine *e, struct timespec *ts, complete_fn fn)
+ 	memset(&event, 0, sizeof(event));
+ 	r = io_getevents(e->aio_context, 1, MAX_IO, event, ts);
+ 	if (r < 0) {
+-		warn("io_getevents failed");
++		warn("io_getevents failed, ret=%d\n", r);
+ 		return r;
+ 	}
+ 
+@@ -514,12 +516,22 @@ static void relink(struct block *b)
+  */
+ static int issue_low_level(struct block *b, enum dir d)
+ {
++	int r;
+ 	struct bcache *cache = b->cache;
+ 	sector_t sb = b->index * cache->block_sectors;
+ 	sector_t se = sb + cache->block_sectors;
+ 	set_flags(b, BF_IO_PENDING);
++	cache->nr_io_pending++;
++	list_add_tail(&b->list, &cache->io_pending);
+ 
+-	return engine_issue(cache->engine, cache->fd, d, sb, se, b->data, b);
++	r = engine_issue(cache->engine, cache->fd, d, sb, se, b->data, b);
++	if (r < 0) {
++		list_del(&b->list);
++		cache->nr_io_pending--;
++		clear_flags(b, BF_IO_PENDING);
++		return r;
++	}
++	return 0;
+ }
+ 
+ static void issue_read(struct block *b)
+@@ -709,7 +721,7 @@ struct bcache *bcache_simple(const char *path, unsigned nr_cache_blocks)
+ 	int r;
+ 	struct stat info;
+ 	struct bcache *cache;
+-	int fd = open(path, O_DIRECT | O_EXCL | O_RDONLY);
++	int fd = open(path, O_DIRECT | O_EXCL | O_RDWR);
+ 	uint64_t s;
+ 
+ 	if (fd < 0) {
+diff --git a/functional-tests/thin-functional-tests.scm b/functional-tests/thin-functional-tests.scm
+index 55b0e60..fcabddf 100644
+--- a/functional-tests/thin-functional-tests.scm
++++ b/functional-tests/thin-functional-tests.scm
+@@ -12,6 +12,7 @@
+     (process)
+     (scenario-string-constants)
+     (temp-file)
++    (thin metadata)
+     (thin xml)
+     (srfi s8 receive))
+ 
+@@ -30,6 +31,12 @@
+        (with-temp-file-containing ((v "thin.xml" (fmt #f (generate-xml 10 1000))))
+                                   b1 b2 ...))))
+ 
++  (define-syntax with-needs-check-thin-xml
++    (syntax-rules ()
++      ((_ (v) b1 b2 ...)
++       (with-temp-file-containing ((v "thin.xml" (fmt #f (generate-xml 10 1000 1))))
++                                  b1 b2 ...))))
++
+   (define-syntax with-valid-metadata
+     (syntax-rules ()
+       ((_ (md) b1 b2 ...)
+@@ -63,6 +70,28 @@
+          (damage-superblock md)
+          b1 b2 ...))))
+ 
++  (define superblock-salt 160774)
++  (define (set-needs-check-flag md)
++    (with-bcache (cache md 1)
++      (with-block (b cache 0 (get-flags dirty))
++        (let ((sb (block->superblock b)))
++          (ftype-set! ThinSuperblock (flags) sb 1)
++          ;;;;;; Update the csum manually since the block validator for ft-lib is not ready
++          (let ((csum (checksum-block b (ftype-sizeof unsigned-32) superblock-salt)))
++            (ftype-set! ThinSuperblock (csum) sb csum))))))
++
++  (define (get-superblock-flags md)
++    (with-bcache (cache md 1)
++      (with-block (b cache 0 (get-flags))
++        (let ((sb (block->superblock b)))
++          (ftype-ref ThinSuperblock (flags) sb)))))
++
++  (define (assert-metadata-needs-check md)
++    (assert-equal (get-superblock-flags md) 1))
++
++  (define (assert-metadata-clean md)
++    (assert-equal (get-superblock-flags md) 0))
++
+   ;; We have to export something that forces all the initialisation expressions
+   ;; to run.
+   (define (register-thin-tests) #t)
+@@ -173,6 +202,13 @@
+   ;;;-----------------------------------------------------------
+   ;;; thin_restore scenarios
+   ;;;-----------------------------------------------------------
++  (define-scenario (thin-restore clear-needs-check-flag)
++    "thin_restore should clear the needs-check flag"
++    (with-empty-metadata (md)
++      (with-needs-check-thin-xml (xml)
++        (run-ok-rcv (stdout _) (thin-restore "-i" xml "-o" md "-q")
++          (assert-eof stdout)))
++      (assert-metadata-clean md)))
+ 
+   (define-scenario (thin-restore print-version-v)
+     "print help (-V)"
+@@ -439,6 +475,16 @@
+   ;;;-----------------------------------------------------------
+   ;;; thin_repair scenarios
+   ;;;-----------------------------------------------------------
++  (define-scenario (thin-repair clear-needs-check-flag)
++    "thin_repair should clear the needs-check flag"
++    (with-valid-metadata (md1)
++      (set-needs-check-flag md1)
++      (assert-metadata-needs-check md1)
++      (with-empty-metadata (md2)
++        (run-ok-rcv (stdout stderr) (thin-repair "-i" md1 "-o" md2)
++          (assert-eof stderr))
++        (assert-metadata-clean md2))))
++
+   (define-scenario (thin-repair dont-repair-xml)
+     "Fails gracefully if run on XML rather than metadata"
+     (with-thin-xml (xml)
+diff --git a/functional-tests/thin/xml.scm b/functional-tests/thin/xml.scm
+index 551a536..7d9314b 100644
+--- a/functional-tests/thin/xml.scm
++++ b/functional-tests/thin/xml.scm
+@@ -22,7 +22,7 @@
+                                (length . ,nr-mappings)
+                                (time . 1)))))
+ 
+-  (define (generate-xml max-thins max-mappings)
++  (define (generate-xml max-thins max-mappings . needs-check)
+     (let ((nr-thins ((make-uniform-generator 1 max-thins)))
+           (nr-mappings-g (make-uniform-generator (div-down max-mappings 2)
+                                                  max-mappings)))
+@@ -30,7 +30,7 @@
+        (tag 'superblock `((uuid . "")
+                          (time . 1)
+                          (transaction . 1)
+-                         (flags . 0)
++                         (flags . ,(if (null? needs-check) 0 (car needs-check)))
+                          (version . 2)
+                          (data-block-size . 128)
+                          (nr-data-blocks . ,(apply + nr-mappings)))
+diff --git a/thin-provisioning/restore_emitter.cc b/thin-provisioning/restore_emitter.cc
+index 6e95a53..114ba4f 100644
+--- a/thin-provisioning/restore_emitter.cc
++++ b/thin-provisioning/restore_emitter.cc
+@@ -57,7 +57,7 @@ namespace {
+ 			memcpy(&sb.uuid_, uuid.c_str(), std::min(sizeof(sb.uuid_), uuid.length()));
+ 			sb.time_ = time;
+ 			sb.trans_id_ = trans_id;
+-			sb.flags_ = flags ? *flags : 0;
++			sb.flags_ = 0;
+ 			sb.version_ = version ? *version : 1;
+ 			sb.data_block_size_ = data_block_size;
+ 			sb.metadata_snap_ = metadata_snap ? *metadata_snap : 0;
+-- 
+1.8.3.1
+

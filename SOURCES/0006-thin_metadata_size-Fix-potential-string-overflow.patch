@@ -1,0 +1,33 @@
+From 35e96e07c956a501cb8a12f5b873db173bb09179 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Wed, 2 Jun 2021 11:39:01 +0800
+Subject: [PATCH 06/10] [thin_metadata_size] Fix potential string overflow
+
+---
+ thin-provisioning/thin_metadata_size.cc | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/thin-provisioning/thin_metadata_size.cc b/thin-provisioning/thin_metadata_size.cc
+index b6a5718..f14696c 100644
+--- a/thin-provisioning/thin_metadata_size.cc
++++ b/thin-provisioning/thin_metadata_size.cc
+@@ -192,9 +192,13 @@ static void printf_aligned(struct global *g, char const *a, char const *b, char
+ {
+ 	char buf[80];
+ 
+-	strcpy(buf, b);
+-	if (units)
+-		strcat(buf, mandatory ? "{" :"["), strcat(buf, g->unit.chars), strcat(buf, mandatory ? "}" : "]");
++	if (units) {
++		char left_bracket = mandatory ? '{' : '[';
++		char right_bracket = mandatory ? '}' : ']';
++		snprintf(buf, 80, "%s%c%s%c", b, left_bracket, g->unit.chars, right_bracket);
++	} else {
++		snprintf(buf, 80, "%s", b);
++	}
+ 
+ 	printf("\t%-4s%-44s%s\n", a, buf, c);
+ }
+-- 
+1.8.3.1
+

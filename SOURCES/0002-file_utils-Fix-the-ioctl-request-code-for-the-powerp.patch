@@ -1,0 +1,217 @@
+From 6de336c0e974989010c32693c9540180d4f28f0b Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Sat, 26 Aug 2023 18:19:15 +0800
+Subject: [PATCH 2/3] [file_utils] Fix the ioctl request code for the powerpc
+ architecture
+
+The PowerPC architecture employees a different bitwise layout in the
+request code than other platforms, resulting in different request code
+values.
+
+(cherry picked from commit afcbcd7d85902fc7f1e51fc5302230851303ab85)
+---
+ src/file_utils.rs |  14 ++----
+ src/ioctl.rs      | 106 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/lib.rs        |   1 +
+ src/thin/trim.rs  |  11 ++---
+ 4 files changed, 115 insertions(+), 17 deletions(-)
+ create mode 100644 src/ioctl.rs
+
+diff --git a/src/file_utils.rs b/src/file_utils.rs
+index 81d4a8a7..97400272 100644
+--- a/src/file_utils.rs
++++ b/src/file_utils.rs
+@@ -5,6 +5,8 @@ use std::os::unix::ffi::OsStrExt;
+ use std::os::unix::io::AsRawFd;
+ use std::path::Path;
+ 
++use crate::ioctl::{self, *};
++
+ //---------------------------------------
+ 
+ fn test_bit(mode: u32, flag: u32) -> bool {
+@@ -41,10 +43,7 @@ pub fn is_file(path: &Path) -> io::Result<bool> {
+ 
+ //---------------------------------------
+ 
+-#[cfg(target_pointer_width = "32")]
+-const BLKGETSIZE64: u32 = 0x80041272;
+-#[cfg(target_pointer_width = "64")]
+-const BLKGETSIZE64: u32 = 0x80081272;
++const BLKGETSIZE64: ioctl::RequestType = crate::request_code_read!(0x12, 114, usize);
+ 
+ pub fn fail<T>(msg: &str) -> io::Result<T> {
+     let e = io::Error::new(io::ErrorKind::Other, msg);
+@@ -56,13 +55,8 @@ fn get_device_size<P: AsRef<Path>>(path: P) -> io::Result<u64> {
+     let fd = file.as_raw_fd();
+     let mut cap = 0u64;
+ 
+-    #[cfg(target_env = "musl")]
+-    type RequestType = libc::c_int;
+-    #[cfg(not(target_env = "musl"))]
+-    type RequestType = libc::c_ulong;
+-
+     unsafe {
+-        if libc::ioctl(fd, BLKGETSIZE64 as RequestType, &mut cap) == 0 {
++        if libc::ioctl(fd, BLKGETSIZE64, &mut cap) == 0 {
+             Ok(cap)
+         } else {
+             Err(io::Error::last_os_error())
+diff --git a/src/ioctl.rs b/src/ioctl.rs
+new file mode 100644
+index 00000000..84933648
+--- /dev/null
++++ b/src/ioctl.rs
+@@ -0,0 +1,106 @@
++/* Rust port of kernel include/uapi/asm-generic/ioctl.h */
++
++//------------------------------------------
++
++#[cfg(target_env = "musl")]
++pub type RequestType = libc::c_int;
++#[cfg(not(target_env = "musl"))]
++pub type RequestType = libc::c_ulong;
++
++#[cfg(any(
++    target_arch = "mips",
++    target_arch = "mips64",
++    target_arch = "powerpc",
++    target_arch = "powerpc64",
++    target_arch = "powerpc64le",
++    target_arch = "sparc",
++    target_arch = "sparc64"
++))]
++mod defs {
++    use super::RequestType;
++    pub const IOC_NONE: RequestType = 1;
++    pub const IOC_READ: RequestType = 2;
++    pub const IOC_WRITE: RequestType = 4;
++    pub const IOC_DIRBITS: RequestType = 3;
++    pub const IOC_SIZEBITS: RequestType = 13;
++}
++
++#[cfg(not(any(
++    target_arch = "mips",
++    target_arch = "mips64",
++    target_arch = "powerpc",
++    target_arch = "powerpc64",
++    target_arch = "powerpc64le",
++    target_arch = "sparc",
++    target_arch = "sparc64"
++)))]
++mod defs {
++    use super::RequestType;
++    pub const IOC_NONE: RequestType = 0;
++    pub const IOC_WRITE: RequestType = 1;
++    pub const IOC_READ: RequestType = 2;
++    pub const IOC_DIRBITS: RequestType = 2;
++    pub const IOC_SIZEBITS: RequestType = 14;
++}
++
++pub use defs::*;
++
++pub const IOC_NRBITS: RequestType = 8;
++pub const IOC_TYPEBITS: RequestType = 8;
++
++pub const IOC_NRMASK: RequestType = (1 << IOC_NRBITS) - 1;
++pub const IOC_TYPEMASK: RequestType = (1 << IOC_TYPEBITS) - 1;
++pub const IOC_SIZEMASK: RequestType = (1 << IOC_SIZEBITS) - 1;
++pub const IOC_DIRMASK: RequestType = (1 << IOC_DIRBITS) - 1;
++
++pub const IOC_NRSHIFT: RequestType = 0;
++pub const IOC_TYPESHIFT: RequestType = IOC_NRSHIFT + IOC_NRBITS;
++pub const IOC_SIZESHIFT: RequestType = IOC_TYPESHIFT + IOC_TYPEBITS;
++pub const IOC_DIRSHIFT: RequestType = IOC_SIZESHIFT + IOC_SIZEBITS;
++
++#[macro_export]
++macro_rules! ioc {
++    ($dir: expr, $typ: expr, $nr: expr, $size: expr) => {
++        (($dir as RequestType & IOC_DIRMASK) << IOC_DIRSHIFT)
++            | (($typ as RequestType & IOC_TYPEMASK) << IOC_TYPESHIFT)
++            | (($nr as RequestType & IOC_NRMASK) << IOC_NRSHIFT)
++            | (($size as RequestType & IOC_SIZEMASK) << IOC_SIZESHIFT)
++    };
++}
++
++//------------------------------------------
++
++#[macro_export]
++macro_rules! request_code_none {
++    ($typ: expr, $nr: expr) => {
++        $crate::ioc!(IOC_NONE, $typ, $nr, 0)
++    };
++}
++
++#[macro_export]
++macro_rules! request_code_read {
++    ($typ: expr, $nr: expr, $size_type: ty) => {
++        $crate::ioc!(IOC_READ, $typ, $nr, ::std::mem::size_of::<$size_type>())
++    };
++}
++
++#[macro_export]
++macro_rules! request_code_write {
++    ($typ: expr, $nr: expr, $size_type: ty) => {
++        $crate::ioc!(IOC_WRITE, $typ, $nr, ::std::mem::size_of::<$size_type>())
++    };
++}
++
++#[macro_export]
++macro_rules! request_code_readwrite {
++    ($typ: expr, $nr: expr, $size_type: ty) => {
++        $crate::ioc!(
++            IOC_READ | IOC_WRITE,
++            $typ,
++            $nr,
++            ::std::mem::size_of::<$size_type>()
++        )
++    };
++}
++
++//------------------------------------------
+diff --git a/src/lib.rs b/src/lib.rs
+index b12146ef..1371baac 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -14,6 +14,7 @@ pub mod era;
+ pub mod file_utils;
+ pub mod grid_layout;
+ pub mod io_engine;
++pub mod ioctl;
+ pub mod math;
+ pub mod pack;
+ pub mod pdata;
+diff --git a/src/thin/trim.rs b/src/thin/trim.rs
+index 0d1fb590..b92a4bbd 100644
+--- a/src/thin/trim.rs
++++ b/src/thin/trim.rs
+@@ -8,6 +8,7 @@ use std::sync::Arc;
+ use crate::commands::engine::*;
+ use crate::file_utils::file_size;
+ use crate::io_engine::*;
++use crate::ioctl::{self, *};
+ use crate::pdata::btree_walker::*;
+ use crate::pdata::space_map::common::*;
+ use crate::pdata::unpack::unpack;
+@@ -132,15 +133,11 @@ impl<'a> Iterator for RangeIterator<'a> {
+ 
+ //------------------------------------------
+ 
+-const BLKDISCARD: u32 = 0x1277;
+-fn ioctl_blkdiscard(fd: i32, range: &[u64; 2]) -> std::io::Result<()> {
+-    #[cfg(target_env = "musl")]
+-    type RequestType = libc::c_int;
+-    #[cfg(not(target_env = "musl"))]
+-    type RequestType = libc::c_ulong;
++const BLKDISCARD: ioctl::RequestType = crate::request_code_none!(0x12, 119);
+ 
++fn ioctl_blkdiscard(fd: i32, range: &[u64; 2]) -> std::io::Result<()> {
+     unsafe {
+-        if libc::ioctl(fd, BLKDISCARD as RequestType, range) == 0 {
++        if libc::ioctl(fd, BLKDISCARD, range) == 0 {
+             Ok(())
+         } else {
+             Err(std::io::Error::last_os_error())
+-- 
+2.41.0
+

@@ -1,0 +1,122 @@
+From 4a2b112e98fe4c66f805eb690bfe1ae7ba342e5b Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Thu, 19 Aug 2021 18:38:23 +0800
+Subject: [PATCH 2/3] [thin_repair/thin_dump] Change the label type for empty
+ leaves
+
+Empty leaves now are treated as bottom-level leaves, so that empty
+devices could be recovered.
+
+(cherry picked from commit d3f796f5e35162b0867ee2ba8de781f14ad35c61)
+---
+ functional-tests/thin-functional-tests.scm | 53 +++++++++++++++++++++++++++++-
+ thin-provisioning/metadata_dumper.cc       |  8 +++++
+ 2 files changed, 60 insertions(+), 1 deletion(-)
+
+diff --git a/functional-tests/thin-functional-tests.scm b/functional-tests/thin-functional-tests.scm
+index fcabddf..d06a5a3 100644
+--- a/functional-tests/thin-functional-tests.scm
++++ b/functional-tests/thin-functional-tests.scm
+@@ -14,7 +14,8 @@
+     (temp-file)
+     (thin metadata)
+     (thin xml)
+-    (srfi s8 receive))
++    (srfi s8 receive)
++    (xml))
+ 
+   (define-tool thin-check)
+   (define-tool thin-delta)
+@@ -96,6 +97,32 @@
+   ;; to run.
+   (define (register-thin-tests) #t)
+ 
++  ;; XML of metadata with empty thins
++  (define xml-with-empty-thins
++    (fmt #f
++      (tag 'superblock `((uuid . "")
++                         (time . 0)
++                         (transaction . 1)
++                         (flags . 0)
++                         (version . 2)
++                         (data-block-size . 128)
++                         (nr-data-blocks . 1024))
++        (tag 'device `((dev-id . 1)
++                       (mapped-blocks . 16)
++                       (transaction . 0)
++                       (creation-time . 0)
++                       (snap-time . 0))
++          (tag 'range-mapping  `((origin-begin . 0)
++                                 (data-begin . 0)
++                                 (length . 16)
++                                 (time . 0))))
++        (tag 'device `((dev-id . 2)
++                       (mapped-blocks . 0)
++                       (transaction . 0)
++                       (creation-time . 0)
++                       (snap-time . 0))
++          " "))))
++
+   ;;;-----------------------------------------------------------
+   ;;; thin_check scenarios
+   ;;;-----------------------------------------------------------
+@@ -376,6 +403,17 @@
+       (run-fail-rcv (_ stderr) (thin-dump "--repair" "--transaction-id=5" "--data-block-size=128" md)
+         (assert-matches ".*nr data blocks.*" stderr))))
+ 
++  (define-scenario (thin-dump repair-superblock with-empty-devices)
++    "metadata with empty devices could be recovered"
++    (with-temp-file-sized ((md "thin.bin" (meg 4)))
++      (with-temp-file-containing ((xml "thin.xml" xml-with-empty-thins))
++        (run-ok (thin-restore "-i" xml "-o" md)))
++      (run-ok-rcv (expected-xml _) (thin-dump md)
++        (damage-superblock md)
++        (run-ok-rcv (repaired-xml stderr) (thin-dump "--repair" "--transaction-id=1" "--data-block-size=128" "--nr-data-blocks=1024" md)
++          (assert-eof stderr)
++          (assert-equal expected-xml repaired-xml)))))
++
+   ;;;-----------------------------------------------------------
+   ;;; thin_rmap scenarios
+   ;;;-----------------------------------------------------------
+@@ -572,6 +610,19 @@
+         (run-fail-rcv (_ stderr) (thin-repair "--transaction-id=5" "--data-block-size=128" "-i" md1 "-o" md2)
+           (assert-matches ".*nr data blocks.*" stderr)))))
+ 
++  (define-scenario (thin-repair superblock with-empty-devices)
++    "metadata with empty devices could be recovered"
++    (with-temp-file-sized ((md1 "thin.bin" (meg 4)))
++      (with-temp-file-containing ((xml "thin.xml" xml-with-empty-thins))
++        (run-ok (thin-restore "-i" xml "-o" md1)))
++      (run-ok-rcv (expected-xml _) (thin-dump md1)
++        (damage-superblock md1)
++        (with-empty-metadata (md2)
++          (run-ok-rcv (_ stderr) (thin-repair "--transaction-id=1" "--data-block-size=128" "--nr-data-blocks=1024" "-i" md1 "-o" md2)
++            (assert-eof stderr))
++          (run-ok-rcv (repaired-xml stderr) (thin-dump md2)
++            (assert-eof stderr)
++            (assert-equal expected-xml repaired-xml))))))
+ 
+   ;;;-----------------------------------------------------------
+   ;;; thin_metadata_pack scenarios
+diff --git a/thin-provisioning/metadata_dumper.cc b/thin-provisioning/metadata_dumper.cc
+index 37c6969..d169c27 100644
+--- a/thin-provisioning/metadata_dumper.cc
++++ b/thin-provisioning/metadata_dumper.cc
+@@ -438,6 +438,14 @@ namespace {
+ 		// in the bottom 24 bits.  This means every block/time apart from block 0
+ 		// will result in a value that's outside the range of the metadata device.
+ 		bool is_top_level(node_ref<uint64_traits> &n) {
++			// A leaf node of value-size 8 and without mappings should be
++			// treated as a bottom-level leaf, so that it could be referenced
++			// by top-level nodes, if any. On the other hand, an empty
++			// top-level leaf doesn't help repairing.
++			if (!n.get_nr_entries()) {
++				return false;
++			}
++
+ 			auto nr_metadata_blocks = bm_.get_nr_blocks();
+ 
+ 			for (unsigned i = 0; i < n.get_nr_entries(); i++)
+-- 
+1.8.3.1
+

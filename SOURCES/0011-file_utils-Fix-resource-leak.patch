@@ -1,0 +1,24 @@
+From 677fa789e4136dbdd589c1e65efc7cdaad7506ac Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Fri, 4 Jun 2021 21:37:02 +0800
+Subject: [PATCH 1/2] [file_utils] Fix resource leak
+
+---
+ base/file_utils.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/base/file_utils.cc b/base/file_utils.cc
+index 8253660..e6095f7 100644
+--- a/base/file_utils.cc
++++ b/base/file_utils.cc
+@@ -159,6 +159,7 @@ file_utils::zero_superblock(std::string const &path)
+ 		free(buffer);
+ 		throw runtime_error("couldn't zero superblock");
+ 	}
++	free(buffer);
+ }
+ 
+ //----------------------------------------------------------------
+-- 
+1.8.3.1
+

@@ -1,57 +1,29 @@
 #
 # Copyright (C) 2011-2017 Red Hat, Inc
 #
+%bcond_without check
+%global debug_package %{nil}
 
 #%%global version_suffix -rc2
 #%%global release_suffix .test3
 
 Summary: Device-mapper Persistent Data Tools
 Name: device-mapper-persistent-data
-Version: 0.9.0
-Release: 13%{?dist}%{?release_suffix}
+Version: 1.0.6
+Release: 3%{?dist}%{?release_suffix}
 License: GPLv3+
 URL: https://github.com/jthornber/thin-provisioning-tools
 #Source0: https://github.com/jthornber/thin-provisioning-tools/archive/thin-provisioning-tools-%%{version}.tar.gz
 Source0: https://github.com/jthornber/thin-provisioning-tools/archive/v%{version}%{?version_suffix}.tar.gz
-Source1: dmpd090-vendor3.tar.gz
-Patch0: device-mapper-persistent-data-avoid-strip.patch
-Patch1: 0001-Update-dependencies.patch
-# BZ 1938705:
-Patch2: 0001-all-Fix-resource-leaks.patch
-Patch3: 0002-thin_show_metadata-Fix-out-of-bounds-access.patch
-Patch4: 0003-build-Fix-customized-emitter-linkage.patch
-Patch5: 0004-thin_dump-Fix-leaked-shared-object-handle.patch
-Patch6: 0005-thin_show_duplicates-Fix-potential-errors.patch
-Patch7: 0006-thin_metadata_size-Fix-potential-string-overflow.patch
-Patch8: 0007-all-Fix-uninitialized-class-members.patch
-Patch9: 0008-thin_dump-Fix-warnings-on-potential-NULL-pointer.patch
-Patch10: 0009-build-Remove-unused-sources-from-the-regular-build.patch
-Patch11: 0010-all-Remove-unreachable-code.patch
-Patch12: 0011-file_utils-Fix-resource-leak.patch
-Patch13: 0012-thin_delta-Clean-up-duplicated-code.patch
-Patch14: 0013-build-Remove-lboost_iostreams-linker-flag.patch
-Patch15: 0014-cargo-update.patch
-# BZ 202066{0,1,2}:
-Patch16: 0015-thin-Clear-superblock-flags-in-restored-metadata.patch
-Patch17: 0016-thin_repair-thin_dump-Fix-sorting-of-data-mapping-ca.patch
-Patch18: 0017-thin_repair-thin_dump-Change-the-label-type-for-empt.patch
-Patch19: 0018-thin_repair-thin_dump-Check-consistency-of-thin_ids-.patch
-# BZ 2030679:
-Patch20: 0019-thin_check-Allow-using-clear-needs-check-and-skip-ma.patch
-# BZ 2091624:
-Patch21: 0020-thin_repair-thin_dump-Exclude-unwanted-btree-nodes.patch
+Source1: dmpd106-vendor.tar.gz
+Patch1: 0001-Tweak-cargo.toml-to-work-with-vendor-directory.patch
+# BZ 2233533:
+Patch2: 0002-file_utils-Fix-the-ioctl-request-code-for-the-powerp.patch
+Patch3: 0003-file_utils-Verify-ioctl-request-code-in-tests.patch
 
-BuildRequires: autoconf, expat-devel, libaio-devel, libstdc++-devel, boost-devel, gcc-c++
-Requires: expat
-%ifarch %{rust_arches}
-%if 0%{?rhel}
-BuildRequires: rust-toolset
-%else
 BuildRequires: rust-packaging
-%endif
 BuildRequires: rust >= 1.35
 BuildRequires: cargo
-%endif
 BuildRequires: make
 
 %description
@@ -63,10 +35,7 @@ are included and era check, dump, restore and invalidate to manage
 snapshot eras
 
 %prep
-%setup -q -n thin-provisioning-tools-%{version}%{?version_suffix}
-%ifarch %{rust_arches}
-%patch1 -p1 -b .toml_update
-%patch15 -p1 -b .backup15
+%autosetup -p1 -n thin-provisioning-tools-%{version}%{?version_suffix}
 #%%cargo_prep
 #%%cargo_generate_buildrequires
 tar xf %{SOURCE1}
@@ -79,51 +48,20 @@ replace-with = "vendored-sources"
 directory = "vendor"
 
 END
-%endif
-%patch0 -p1 -b .avoid_strip
-%patch2 -p1 -b .backup2
-%patch3 -p1 -b .backup3
-%patch4 -p1 -b .backup4
-%patch5 -p1 -b .backup5
-%patch6 -p1 -b .backup6
-%patch7 -p1 -b .backup7
-%patch8 -p1 -b .backup8
-%patch9 -p1 -b .backup9
-%patch10 -p1 -b .backup10
-%patch11 -p1 -b .backup11
-%patch12 -p1 -b .backup12
-%patch13 -p1 -b .backup13
-%patch14 -p1 -b .backup14
-# NOTE: patch 15 is above at the rust setup
-%patch16 -p1 -b .backup16
-%patch17 -p1 -b .backup17
-%patch18 -p1 -b .backup18
-%patch19 -p1 -b .backup19
-%patch20 -p1 -b .backup20
-%patch21 -p1 -b .backup21
 echo %{version}-%{release} > VERSION
 
-%if 0%{?rhel}
-true
-%else
 %generate_buildrequires
-%endif
 
 %build
-autoconf
-%configure --with-optimisation=
-make %{?_smp_mflags} V=
-%ifarch %{rust_arches}
 %cargo_build
+
+%if %{with check}
+%check
+RUST_BACKTRACE=1 %cargo_test || true
 %endif
 
 %install
 make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
-%ifarch %{rust_arches}
-make DESTDIR=%{buildroot} MANDIR=%{_mandir} install-rust-tools
-# cargo_install installs into /usr/bin
-#%%cargo_install
-%endif
 
 %files
 %doc COPYING README.md
@@ -146,10 +84,8 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install-rust-tools
 %{_mandir}/man8/thin_restore.8.gz
 %{_mandir}/man8/thin_rmap.8.gz
 %{_mandir}/man8/thin_trim.8.gz
-%ifarch %{rust_arches}
 %{_mandir}/man8/thin_metadata_pack.8.gz
 %{_mandir}/man8/thin_metadata_unpack.8.gz
-%endif
 %{_sbindir}/pdata_tools
 %{_sbindir}/cache_check
 %{_sbindir}/cache_dump
@@ -170,13 +106,26 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install-rust-tools
 %{_sbindir}/thin_restore
 %{_sbindir}/thin_rmap
 %{_sbindir}/thin_trim
-%ifarch %{rust_arches}
 %{_sbindir}/thin_metadata_pack
 %{_sbindir}/thin_metadata_unpack
-%endif
 #% {_sbindir}/thin_show_duplicates
 
 %changelog
+* Mon Sep 11 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-3
+- Fix build target.
+
+* Thu Aug 31 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-2
+- Fix broken installation on ppc64le caused by incorrect ioctl call.
+
+* Wed Aug 09 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-1
+- Update to latest upstream release 1.0.6.
+
+* Thu Jul 27 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.5-1
+- Update to latest upstream release 1.0.5.
+
+* Fri Apr 28 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.4-1
+- Update to latest upstream release 1.0.4.
+
 * Wed Jun 22 2022 Marian Csontos <mcsontos@redhat.com> - 0.9.0-13
 - Improve duration of thin_repair on very large metadata devices.
 

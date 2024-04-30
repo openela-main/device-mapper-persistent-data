@@ -1,0 +1,225 @@
+From 6f7f70da8341cfe8447c6c70ebb4085629983b0d Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 20 Feb 2024 04:16:46 +0800
+Subject: [PATCH 07/10] [thin_dump] Do not print error messages on BrokenPipe
+ (EPIPE)
+
+Considering BrokenPipe is an expected result in most use cases,
+thin_dump should not print error messages in this situation but should
+return a non-zero exit code instead. For instance, lvconvert fetches
+only the first line of thin_dump then closes the pipe immediately,
+causing BrokenPipe to terminate thin_dump intentionally.
+
+Changes made include removing the unused NodeVisitor abstraction for
+MappingVisitor to keep the error type from low-level io, and printing
+messages based on the error type returned upward (bz2233177).
+
+(cherry picked from commit d7b91f9f7e9e4118f1f47df19d81fc9bc6965ec5)
+---
+ src/commands/utils.rs   | 16 ++++++---
+ src/thin/dump.rs        | 31 +++---------------
+ tests/common/process.rs |  2 +-
+ tests/thin_dump.rs      | 72 ++++++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 89 insertions(+), 32 deletions(-)
+
+diff --git a/src/commands/utils.rs b/src/commands/utils.rs
+index 0be4fa7f..38751603 100644
+--- a/src/commands/utils.rs
++++ b/src/commands/utils.rs
+@@ -162,10 +162,18 @@ pub fn check_overwrite_metadata(report: &Report, path: &Path) -> Result<()> {
+ 
+ pub fn to_exit_code<T>(report: &Report, result: anyhow::Result<T>) -> exitcode::ExitCode {
+     if let Err(e) = result {
+-        if e.chain().len() > 1 {
+-            report.fatal(&format!("{}: {}", e, e.root_cause()));
+-        } else {
+-            report.fatal(&format!("{}", e));
++        let root_cause = e.root_cause();
++        let is_broken_pipe = root_cause
++            .downcast_ref::<Arc<std::io::Error>>() // quick_xml::Error::Io wraps io::Error in Arc
++            .map(|err| err.kind() == std::io::ErrorKind::BrokenPipe)
++            .unwrap_or(false);
++
++        if !is_broken_pipe {
++            if e.chain().len() > 1 {
++                report.fatal(&format!("{}: {}", e, root_cause));
++            } else {
++                report.fatal(&format!("{}", e));
++            }
+         }
+ 
+         // FIXME: we need a way of getting more meaningful error codes
+diff --git a/src/thin/dump.rs b/src/thin/dump.rs
+index f6046487..561ea566 100644
+--- a/src/thin/dump.rs
++++ b/src/thin/dump.rs
+@@ -10,8 +10,7 @@ use crate::checksum;
+ use crate::commands::engine::*;
+ use crate::dump_utils::*;
+ use crate::io_engine::*;
+-use crate::pdata::btree::{self, *};
+-use crate::pdata::btree_walker::*;
++use crate::pdata::btree::*;
+ use crate::pdata::space_map::common::*;
+ use crate::pdata::unpack::*;
+ use crate::report::*;
+@@ -104,9 +103,7 @@ impl<'a> MappingVisitor<'a> {
+             }),
+         }
+     }
+-}
+ 
+-impl<'a> NodeVisitor<BlockTime> for MappingVisitor<'a> {
+     fn visit(
+         &self,
+         _path: &[u64],
+@@ -114,39 +111,21 @@ impl<'a> NodeVisitor<BlockTime> for MappingVisitor<'a> {
+         _h: &NodeHeader,
+         keys: &[u64],
+         values: &[BlockTime],
+-    ) -> btree::Result<()> {
++    ) -> Result<()> {
+         let mut inner = self.inner.lock().unwrap();
+         for (k, v) in keys.iter().zip(values.iter()) {
+             if let Some(run) = inner.builder.next(*k, v.block, v.time) {
+-                // FIXME: BTreeError should carry more information than a string
+-                //        so the caller could identify the actual root cause,
+-                //        e.g., a broken pipe error or something.
+-                inner
+-                    .md_out
+-                    .map(&run)
+-                    .map_err(|e| btree::value_err(format!("{}", e)))?;
++                inner.md_out.map(&run)?;
+             }
+         }
+ 
+         Ok(())
+     }
+ 
+-    fn visit_again(&self, _path: &[u64], b: u64) -> btree::Result<()> {
+-        let mut inner = self.inner.lock().unwrap();
+-        inner
+-            .md_out
+-            .ref_shared(&format!("{}", b))
+-            .map_err(|e| btree::value_err(format!("{}", e)))?;
+-        Ok(())
+-    }
+-
+-    fn end_walk(&self) -> btree::Result<()> {
++    fn end_walk(&self) -> Result<()> {
+         let mut inner = self.inner.lock().unwrap();
+         if let Some(run) = inner.builder.complete() {
+-            inner
+-                .md_out
+-                .map(&run)
+-                .map_err(|e| btree::value_err(format!("{}", e)))?;
++            inner.md_out.map(&run)?;
+         }
+         Ok(())
+     }
+diff --git a/tests/common/process.rs b/tests/common/process.rs
+index 99f10dc7..ad26c38b 100644
+--- a/tests/common/process.rs
++++ b/tests/common/process.rs
+@@ -39,7 +39,7 @@ impl Command {
+         Command { program, args }
+     }
+ 
+-    fn to_expr(&self) -> duct::Expression {
++    pub fn to_expr(&self) -> duct::Expression {
+         duct::cmd(&self.program, &self.args)
+     }
+ }
+diff --git a/tests/thin_dump.rs b/tests/thin_dump.rs
+index 28cb237d..6e2cd3db 100644
+--- a/tests/thin_dump.rs
++++ b/tests/thin_dump.rs
+@@ -129,7 +129,7 @@ fn dump_restore_cycle() -> Result<()> {
+ // test no stderr with a normal dump
+ 
+ #[test]
+-fn no_stderr() -> Result<()> {
++fn no_stderr_on_success() -> Result<()> {
+     let mut td = TestDir::new()?;
+ 
+     let md = mk_valid_md(&mut td)?;
+@@ -139,6 +139,76 @@ fn no_stderr() -> Result<()> {
+     Ok(())
+ }
+ 
++//------------------------------------------
++// test no stderr on broken pipe errors
++
++#[test]
++fn no_stderr_on_broken_pipe() -> Result<()> {
++    use anyhow::ensure;
++
++    let mut td = TestDir::new()?;
++
++    // use the metadata producing dump more than 64KB (the default pipe buffer size),
++    // such that thin_dump will be blocked on writing to the pipe, then hits EPIPE.
++    let md = prep_metadata(&mut td)?;
++
++    let mut pipefd = [0i32; 2];
++    unsafe {
++        ensure!(libc::pipe2(pipefd.as_mut_slice().as_mut_ptr(), libc::O_CLOEXEC) == 0);
++    }
++
++    let cmd = thin_dump_cmd(args![&md])
++        .to_expr()
++        .stdout_file(pipefd[1])
++        .stderr_capture();
++    let handle = cmd.unchecked().start()?;
++
++    // wait for thin_dump to fill the pipe buffer
++    std::thread::sleep(std::time::Duration::from_millis(1000));
++
++    unsafe {
++        libc::close(pipefd[1]); // close the unused write-end
++        libc::close(pipefd[0]); // causing broken pipe
++    }
++
++    let output = handle.wait()?;
++    ensure!(!output.status.success());
++    ensure!(output.stderr.is_empty());
++
++    Ok(())
++}
++
++#[test]
++fn no_stderr_on_broken_fifo() -> Result<()> {
++    use anyhow::ensure;
++
++    let mut td = TestDir::new()?;
++
++    // use the metadata producing dump more than 64KB (the default pipe buffer size),
++    // such that thin_dump will be blocked on writing to the pipe, then hits EPIPE.
++    let md = prep_metadata(&mut td)?;
++
++    let out_fifo = td.mk_path("out_fifo");
++    unsafe {
++        let c_str = std::ffi::CString::new(out_fifo.as_os_str().as_encoded_bytes()).unwrap();
++        ensure!(libc::mkfifo(c_str.as_ptr(), 0o666) == 0);
++    };
++
++    let cmd = thin_dump_cmd(args![&md, "-o", &out_fifo])
++        .to_expr()
++        .stderr_capture();
++    let handle = cmd.unchecked().start()?;
++
++    let fifo = std::fs::File::open(out_fifo)?;
++    drop(fifo); // causing broken pipe
++
++    let output = handle.wait()?;
++    ensure!(!output.status.success());
++    ensure!(output.stderr.is_empty());
++
++    Ok(())
++}
++
+ //------------------------------------------
+ // test dump metadata snapshot from a live metadata
+ // here we use a corrupted metadata to ensure that "thin_dump -m" reads the
+-- 
+2.43.0
+

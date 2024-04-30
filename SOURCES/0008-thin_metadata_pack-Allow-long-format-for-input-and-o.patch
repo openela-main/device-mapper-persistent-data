@@ -1,0 +1,34 @@
+From e6659ff342516f1861cdb1f365dfb4f79bb45c54 Mon Sep 17 00:00:00 2001
+From: mulhern <amulhern@redhat.com>
+Date: Sun, 7 Jan 2024 20:17:13 -0500
+Subject: [PATCH 08/10] thin_metadata_pack: Allow long format for input and
+ output
+
+The options match the man pages that way.
+
+(cherry picked from commit b5e7028effc51ad1c303424a9f1d161d2f7b0c7c)
+---
+ src/commands/thin_metadata_pack.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/commands/thin_metadata_pack.rs b/src/commands/thin_metadata_pack.rs
+index 5aad973c..265439c9 100644
+--- a/src/commands/thin_metadata_pack.rs
++++ b/src/commands/thin_metadata_pack.rs
+@@ -26,11 +26,13 @@ impl ThinMetadataPackCommand {
+                 .help("Specify thinp metadata binary device/file")
+                 .required(true)
+                 .short('i')
++                .long("input")
+                 .value_name("DEV"))
+             .arg(Arg::new("OUTPUT")
+                 .help("Specify packed output file")
+                 .required(true)
+                 .short('o')
++                .long("output")
+                 .value_name("FILE"))
+     }
+ }
+-- 
+2.43.0
+

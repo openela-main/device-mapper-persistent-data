@@ -1,0 +1,62 @@
+From e295610fad85ec1a64e569cba425ca557a56c6e6 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Wed, 31 Jan 2024 11:36:17 +0800
+Subject: [PATCH 6/6] [thin/cache_check] Print suggestive hints for improving
+ error resolution
+
+Enhance error messages to instruct users on addressing recoverable
+errors, eliminating the guesswork (bz2233177).
+
+(cherry picked from commit aaf3b396574709902ffba47e03a5c7ded6a103c5)
+---
+ src/cache/check.rs |  5 ++++-
+ src/thin/check.rs  | 10 ++++++++--
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/cache/check.rs b/src/cache/check.rs
+index c71d3059..17d1af77 100644
+--- a/src/cache/check.rs
++++ b/src/cache/check.rs
+@@ -387,7 +387,10 @@ pub fn check(opts: CacheCheckOptions) -> anyhow::Result<()> {
+             ctx.report.warning("Repairing metadata leaks.");
+             repair_space_map(ctx.engine.clone(), metadata_leaks, metadata_sm.clone())?;
+         } else if !opts.ignore_non_fatal {
+-            return Err(anyhow!("metadata space map contains leaks"));
++            return Err(anyhow!(concat!(
++                "metadata space map contains leaks\n",
++                "perhaps you wanted to run with --auto-repair"
++            )));
+         }
+     }
+ 
+diff --git a/src/thin/check.rs b/src/thin/check.rs
+index 8b829899..f6fde359 100644
+--- a/src/thin/check.rs
++++ b/src/thin/check.rs
+@@ -1246,7 +1246,10 @@ pub fn check(opts: ThinCheckOptions) -> Result<()> {
+             report.warning("Repairing data leaks.");
+             repair_space_map(engine.clone(), data_leaks, data_sm.clone())?;
+         } else if !opts.ignore_non_fatal {
+-            return Err(anyhow!("data space map contains leaks"));
++            return Err(anyhow!(concat!(
++                "data space map contains leaks\n",
++                "perhaps you wanted to run with --auto-repair"
++            )));
+         }
+     }
+ 
+@@ -1255,7 +1258,10 @@ pub fn check(opts: ThinCheckOptions) -> Result<()> {
+             report.warning("Repairing metadata leaks.");
+             repair_space_map(engine.clone(), metadata_leaks, metadata_sm.clone())?;
+         } else if !opts.ignore_non_fatal {
+-            return Err(anyhow!("metadata space map contains leaks"));
++            return Err(anyhow!(concat!(
++                "metadata space map contains leaks\n",
++                "perhaps you wanted to run with --auto-repair"
++            )));
+         }
+     }
+ 
+-- 
+2.43.0
+

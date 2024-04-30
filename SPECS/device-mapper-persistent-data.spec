@@ -9,17 +9,26 @@
 
 Summary: Device-mapper Persistent Data Tools
 Name: device-mapper-persistent-data
-Version: 1.0.6
+Version: 1.0.9
 Release: 3%{?dist}%{?release_suffix}
 License: GPLv3+
 URL: https://github.com/jthornber/thin-provisioning-tools
 #Source0: https://github.com/jthornber/thin-provisioning-tools/archive/thin-provisioning-tools-%%{version}.tar.gz
 Source0: https://github.com/jthornber/thin-provisioning-tools/archive/v%{version}%{?version_suffix}.tar.gz
-Source1: dmpd106-vendor.tar.gz
+Source1: dmpd109-vendor.tar.gz
 Patch1: 0001-Tweak-cargo.toml-to-work-with-vendor-directory.patch
-# BZ 2233533:
-Patch2: 0002-file_utils-Fix-the-ioctl-request-code-for-the-powerp.patch
-Patch3: 0003-file_utils-Verify-ioctl-request-code-in-tests.patch
+Patch2: 0002-space-map-Fix-incorrect-index_entry.nr_free-while-ex.patch
+Patch3: 0003-thin_repair-Fix-child-keys-checking-on-the-node-with.patch
+Patch4: 0004-space_map-Allow-non-zero-values-in-unused-index-bloc.patch
+Patch5: 0005-cache_check-Fix-boundary-check-on-the-bitset-for-cac.patch
+Patch6: 0006-thin-cache_check-Print-suggestive-hints-for-improvin.patch
+# RHEL-26521:
+Patch7: 0007-thin_dump-Do-not-print-error-messages-on-BrokenPipe-.patch
+# RHEL-26520:
+Patch8: 0008-thin_metadata_pack-Allow-long-format-for-input-and-o.patch
+Patch9: 0009-commands-Fix-version-string-compatibility-issue-with.patch
+# RHEL-26521:
+Patch10: 0010-thin_dump-Do-not-print-error-messages-on-BrokenPipe-.patch
 
 BuildRequires: rust-packaging
 BuildRequires: rust >= 1.35
@@ -57,7 +66,10 @@ echo %{version}-%{release} > VERSION
 
 %if %{with check}
 %check
-RUST_BACKTRACE=1 %cargo_test || true
+# aarch64 is failing, but only in brew environment, tests are passing when
+# running locally 
+#%%cargo_test
+RUST_BACKTRACE=1 %%cargo_test -- --nocapture --test-threads=1 || true
 %endif
 
 %install
@@ -111,11 +123,19 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
 #% {_sbindir}/thin_show_duplicates
 
 %changelog
-* Mon Sep 11 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-3
-- Fix build target.
+* Mon Mar 04 2024 Marian Csontos <mcsontos@redhat.com> - 1.0.9-3
+- Fix --version string compatibility with LVM tools.
+- Fix confusing Broken pipe warning when used in lvconvert --repair.
 
-* Thu Aug 31 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-2
-- Fix broken installation on ppc64le caused by incorrect ioctl call.
+* Thu Feb 08 2024 Marian Csontos <mcsontos@redhat.com> - 1.0.9-2
+- Allow non-zero values in unused index block entries.
+- Fix boundary check on the bitset for cached blocks.
+- Fix incorrect index_entry.nr_free on expansion affecting free space estimate.
+- Fix thin_repair checking keys on a node with a zero key.
+- Enhance error message in cache_check suggesting fix when applicable.
+
+* Wed Dec 13 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.9-1
+- Update to latest upstream release 1.0.9.
 
 * Wed Aug 09 2023 Marian Csontos <mcsontos@redhat.com> - 1.0.6-1
 - Update to latest upstream release 1.0.6.

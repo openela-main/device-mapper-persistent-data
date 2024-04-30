@@ -1,0 +1,1292 @@
+From 255429f9323f68006dc0233a0668a39200342b2c Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Wed, 21 Feb 2024 15:25:53 +0800
+Subject: [PATCH 09/10] [commands] Fix version string compatibility issue with
+ LVM
+
+Make the displayed version string backward-compatible to LVM's
+_check_tool_version() parser, which is used to check cache_check's
+version while activating a cache device (issue #294).
+
+(cherry picked from commit 3cb749b91e5ed0dbd284ddd15b08998898f6d802)
+---
+ src/commands/cache_check.rs             |  5 ++-
+ src/commands/cache_dump.rs              |  5 ++-
+ src/commands/cache_generate_metadata.rs |  5 ++-
+ src/commands/cache_metadata_size.rs     |  9 ++++-
+ src/commands/cache_repair.rs            |  5 ++-
+ src/commands/cache_restore.rs           |  5 ++-
+ src/commands/cache_writeback.rs         |  5 ++-
+ src/commands/era_check.rs               |  5 ++-
+ src/commands/era_dump.rs                |  5 ++-
+ src/commands/era_generate_metadata.rs   |  5 ++-
+ src/commands/era_invalidate.rs          |  5 ++-
+ src/commands/era_repair.rs              |  5 ++-
+ src/commands/era_restore.rs             |  5 ++-
+ src/commands/thin_check.rs              |  5 ++-
+ src/commands/thin_delta.rs              | 49 +++++++++++++++++--------
+ src/commands/thin_dump.rs               |  5 ++-
+ src/commands/thin_explore.rs            |  3 ++
+ src/commands/thin_generate_damage.rs    |  5 ++-
+ src/commands/thin_generate_metadata.rs  |  5 ++-
+ src/commands/thin_ls.rs                 |  5 ++-
+ src/commands/thin_metadata_pack.rs      |  9 ++++-
+ src/commands/thin_metadata_size.rs      |  9 ++++-
+ src/commands/thin_metadata_unpack.rs    |  5 ++-
+ src/commands/thin_repair.rs             |  5 ++-
+ src/commands/thin_restore.rs            |  5 ++-
+ src/commands/thin_rmap.rs               |  5 ++-
+ src/commands/thin_shrink.rs             |  9 ++++-
+ src/commands/thin_stat.rs               |  5 ++-
+ src/commands/thin_trim.rs               |  5 ++-
+ src/version.rs                          | 32 ++++++++++++++++
+ tests/common/common_args.rs             |  4 +-
+ tests/thin_delta.rs                     | 12 ++----
+ 32 files changed, 194 insertions(+), 57 deletions(-)
+
+diff --git a/src/commands/cache_check.rs b/src/commands/cache_check.rs
+index dd86d492..3af29b8c 100644
+--- a/src/commands/cache_check.rs
++++ b/src/commands/cache_check.rs
+@@ -8,6 +8,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -18,6 +19,7 @@ impl CacheCheckCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Validates cache metadata on a device or file.")
+             // flags
+             .arg(
+@@ -76,7 +78,7 @@ impl CacheCheckCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -87,6 +89,7 @@ impl<'a> Command<'a> for CacheCheckCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+diff --git a/src/commands/cache_dump.rs b/src/commands/cache_dump.rs
+index f087536d..43126495 100644
+--- a/src/commands/cache_dump.rs
++++ b/src/commands/cache_dump.rs
+@@ -7,6 +7,7 @@ use crate::cache::dump::{dump, CacheDumpOptions};
+ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -17,6 +18,7 @@ impl CacheDumpCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Dump the cache metadata to stdout in XML format")
+             .arg(
+                 Arg::new("REPAIR")
+@@ -40,7 +42,7 @@ impl CacheDumpCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -51,6 +53,7 @@ impl<'a> Command<'a> for CacheDumpCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = matches.get_one::<String>("OUTPUT").map(Path::new);
+diff --git a/src/commands/cache_generate_metadata.rs b/src/commands/cache_generate_metadata.rs
+index 449dfad4..0818e46b 100644
+--- a/src/commands/cache_generate_metadata.rs
++++ b/src/commands/cache_generate_metadata.rs
+@@ -8,6 +8,7 @@ use crate::cache::metadata_generator::*;
+ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -18,6 +19,7 @@ impl CacheGenerateMetadataCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("A tool for creating synthetic cache metadata.")
+             // flags
+             .arg(
+@@ -128,7 +130,7 @@ impl CacheGenerateMetadataCommand {
+                     ])
+                     .required(true),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -139,6 +141,7 @@ impl<'a> Command<'a> for CacheGenerateMetadataCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+ 
+diff --git a/src/commands/cache_metadata_size.rs b/src/commands/cache_metadata_size.rs
+index 8189e8cf..0083f44b 100644
+--- a/src/commands/cache_metadata_size.rs
++++ b/src/commands/cache_metadata_size.rs
+@@ -11,6 +11,7 @@ use crate::commands::Command;
+ use crate::math::div_up;
+ use crate::report::mk_simple_report;
+ use crate::units::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -40,9 +41,10 @@ pub struct CacheMetadataSizeCommand;
+ 
+ impl CacheMetadataSizeCommand {
+     fn cli(&self) -> clap::Command {
+-        clap::Command::new(self.name())
++        let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Estimate the size of the metadata device needed for a given configuration.")
+             .override_usage("cache_metadata_size [OPTIONS] <--device-size <SIZE> --block-size <SIZE> | --nr-blocks <NUM>>")
+             // flags
+@@ -98,7 +100,9 @@ impl CacheMetadataSizeCommand {
+                     .value_name("UNIT")
+                     .value_parser(value_parser!(Units))
+                     .default_value("sector"),
+-            )
++            );
++
++        version_args(cmd)
+     }
+ 
+     fn parse_args<I, T>(&self, args: I) -> Result<(CacheMetadataSizeOptions, Units, OutputFormat)>
+@@ -107,6 +111,7 @@ impl CacheMetadataSizeCommand {
+         T: Into<OsString> + Clone,
+     {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let nr_blocks = matches.get_one::<u64>("NR_BLOCKS");
+         let device_size = matches.get_one::<StorageSize>("DEVICE_SIZE");
+diff --git a/src/commands/cache_repair.rs b/src/commands/cache_repair.rs
+index 2098548e..658e096c 100644
+--- a/src/commands/cache_repair.rs
++++ b/src/commands/cache_repair.rs
+@@ -8,6 +8,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::*;
++use crate::version::*;
+ 
+ pub struct CacheRepairCommand;
+ 
+@@ -16,6 +17,7 @@ impl CacheRepairCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Repair binary cache metadata, and write it to a different device or file")
+             .arg(
+                 Arg::new("QUIET")
+@@ -44,7 +46,7 @@ impl CacheRepairCommand {
+             // a dummy argument for compatibility with lvconvert
+             .arg(Arg::new("DUMMY").required(false).hide(true).index(1));
+ 
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -55,6 +57,7 @@ impl<'a> Command<'a> for CacheRepairCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let report = mk_report(matches.get_flag("QUIET"));
+         let log_level = match parse_log_level(&matches) {
+diff --git a/src/commands/cache_restore.rs b/src/commands/cache_restore.rs
+index 609d2a10..b88d9c92 100644
+--- a/src/commands/cache_restore.rs
++++ b/src/commands/cache_restore.rs
+@@ -9,6 +9,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
++use crate::version::*;
+ 
+ pub struct CacheRestoreCommand;
+ 
+@@ -17,6 +18,7 @@ impl CacheRestoreCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Convert XML format metadata to binary.")
+             .arg(
+                 Arg::new("QUIET")
+@@ -58,7 +60,7 @@ impl CacheRestoreCommand {
+                     .value_name("FILE")
+                     .required(true),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -69,6 +71,7 @@ impl<'a> Command<'a> for CacheRestoreCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/cache_writeback.rs b/src/commands/cache_writeback.rs
+index 3e7be9a2..875188a3 100644
+--- a/src/commands/cache_writeback.rs
++++ b/src/commands/cache_writeback.rs
+@@ -7,6 +7,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
++use crate::version::*;
+ 
+ pub struct CacheWritebackCommand;
+ 
+@@ -15,6 +16,7 @@ impl CacheWritebackCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Repair binary cache metadata, and write it to a different device or file")
+             .arg(
+                 Arg::new("QUIET")
+@@ -88,7 +90,7 @@ impl CacheWritebackCommand {
+                     .value_parser(value_parser!(u32))
+                     .default_value("0"),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -99,6 +101,7 @@ impl<'a> Command<'a> for CacheWritebackCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let metadata_dev = Path::new(matches.get_one::<String>("METADATA_DEV").unwrap());
+         let origin_dev = Path::new(matches.get_one::<String>("ORIGIN_DEV").unwrap());
+diff --git a/src/commands/era_check.rs b/src/commands/era_check.rs
+index 7ee03ded..fefd772b 100644
+--- a/src/commands/era_check.rs
++++ b/src/commands/era_check.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::check::{check, EraCheckOptions};
+ use crate::report::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -18,6 +19,7 @@ impl EraCheckCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Validate era metadata on device or file.")
+             // flags
+             .arg(
+@@ -46,7 +48,7 @@ impl EraCheckCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -57,6 +59,7 @@ impl<'a> Command<'a> for EraCheckCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+diff --git a/src/commands/era_dump.rs b/src/commands/era_dump.rs
+index 35100b05..e0f9919e 100644
+--- a/src/commands/era_dump.rs
++++ b/src/commands/era_dump.rs
+@@ -7,6 +7,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::dump::{dump, EraDumpOptions};
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -17,6 +18,7 @@ impl EraDumpCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Dump the era metadata to stdout in XML format")
+             .arg(
+                 Arg::new("LOGICAL")
+@@ -46,7 +48,7 @@ impl EraDumpCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -57,6 +59,7 @@ impl<'a> Command<'a> for EraDumpCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = matches.get_one::<String>("OUTPUT").map(Path::new);
+diff --git a/src/commands/era_generate_metadata.rs b/src/commands/era_generate_metadata.rs
+index 58c46f25..9028c5da 100644
+--- a/src/commands/era_generate_metadata.rs
++++ b/src/commands/era_generate_metadata.rs
+@@ -7,6 +7,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::metadata_generator::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -17,6 +18,7 @@ impl EraGenerateMetadataCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("A tool for creating synthetic era metadata.")
+             // flags
+             .arg(
+@@ -67,7 +69,7 @@ impl EraGenerateMetadataCommand {
+                     .required(true),
+             )
+             .group(ArgGroup::new("commands").args(["FORMAT"]).required(true));
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -78,6 +80,7 @@ impl<'a> Command<'a> for EraGenerateMetadataCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+ 
+diff --git a/src/commands/era_invalidate.rs b/src/commands/era_invalidate.rs
+index cf5c14f9..58032112 100644
+--- a/src/commands/era_invalidate.rs
++++ b/src/commands/era_invalidate.rs
+@@ -5,6 +5,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::invalidate::{invalidate, EraInvalidateOptions};
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -15,6 +16,7 @@ impl EraInvalidateCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("List blocks that may have changed since a given era")
+             .arg(
+                 Arg::new("METADATA_SNAPSHOT")
+@@ -44,7 +46,7 @@ impl EraInvalidateCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -55,6 +57,7 @@ impl<'a> Command<'a> for EraInvalidateCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = matches.get_one::<String>("OUTPUT").map(Path::new);
+diff --git a/src/commands/era_repair.rs b/src/commands/era_repair.rs
+index e4f095c8..825c37d8 100644
+--- a/src/commands/era_repair.rs
++++ b/src/commands/era_repair.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::repair::{repair, EraRepairOptions};
+ use crate::report::*;
++use crate::version::*;
+ 
+ pub struct EraRepairCommand;
+ 
+@@ -16,6 +17,7 @@ impl EraRepairCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Repair binary era metadata, and write it to a different device or file")
+             .arg(
+                 Arg::new("QUIET")
+@@ -41,7 +43,7 @@ impl EraRepairCommand {
+                     .value_name("FILE")
+                     .required(true),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -52,6 +54,7 @@ impl<'a> Command<'a> for EraRepairCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/era_restore.rs b/src/commands/era_restore.rs
+index 9c1184be..b779ac98 100644
+--- a/src/commands/era_restore.rs
++++ b/src/commands/era_restore.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::era::restore::{restore, EraRestoreOptions};
+ use crate::report::{parse_log_level, verbose_args};
++use crate::version::*;
+ 
+ pub struct EraRestoreCommand;
+ 
+@@ -16,6 +17,7 @@ impl EraRestoreCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Convert XML format metadata to binary.")
+             // flags
+             .arg(
+@@ -42,7 +44,7 @@ impl EraRestoreCommand {
+                     .value_name("FILE")
+                     .required(true),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -53,6 +55,7 @@ impl<'a> Command<'a> for EraRestoreCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_check.rs b/src/commands/thin_check.rs
+index c505c821..f8eeafc4 100644
+--- a/src/commands/thin_check.rs
++++ b/src/commands/thin_check.rs
+@@ -6,6 +6,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
+ use crate::thin::check::{check, ThinCheckOptions};
++use crate::version::*;
+ 
+ pub struct ThinCheckCommand;
+ 
+@@ -14,6 +15,7 @@ impl ThinCheckCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Validates thin provisioning metadata on a device or file.")
+             // flags
+             .arg(
+@@ -85,7 +87,7 @@ impl ThinCheckCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -96,6 +98,7 @@ impl<'a> Command<'a> for ThinCheckCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+diff --git a/src/commands/thin_delta.rs b/src/commands/thin_delta.rs
+index 0d4371ac..9d50d641 100644
+--- a/src/commands/thin_delta.rs
++++ b/src/commands/thin_delta.rs
+@@ -9,6 +9,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::thin::delta::*;
+ use crate::thin::delta_visitor::Snap;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -19,6 +20,7 @@ impl ThinDeltaCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Print the differences in the mappings between two thin devices")
+             .arg(
+                 Arg::new("METADATA_SNAPSHOT")
+@@ -72,17 +74,15 @@ impl ThinDeltaCommand {
+                     .index(1),
+             )
+             // groups
+-            .group(
+-                ArgGroup::new("SNAP1")
+-                    .args(["ROOT1", "THIN1"])
+-                    .required(true),
+-            )
+-            .group(
+-                ArgGroup::new("SNAP2")
+-                    .args(["ROOT2", "THIN2"])
+-                    .required(true),
+-            );
+-        engine_args(cmd)
++            //
++            // Due to a bug in clap 4.4 that doesn't handle exclusive Args
++            // and ArgGroup::required(true) properly, we avoid using the
++            // 'required(true)' flag on ArgGroup, and perform manual checks
++            // instead. (see github clap-rs/clap#5041)
++            .group(ArgGroup::new("SNAP1").args(["ROOT1", "THIN1"]))
++            .group(ArgGroup::new("SNAP2").args(["ROOT2", "THIN2"]));
++
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -93,6 +93,7 @@ impl<'a> Command<'a> for ThinDeltaCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+@@ -102,16 +103,34 @@ impl<'a> Command<'a> for ThinDeltaCommand {
+             return to_exit_code::<()>(&report, Err(e));
+         }
+ 
+-        let snap1 = match matches.get_one::<clap::Id>("SNAP1").unwrap().as_str() {
++        let snap1 = match matches
++            .get_one::<clap::Id>("SNAP1")
++            .unwrap_or(&clap::Id::default())
++            .as_str()
++        {
+             "THIN1" => Snap::DeviceId(*matches.get_one::<u64>("THIN1").unwrap()),
+             "ROOT1" => Snap::RootBlock(*matches.get_one::<u64>("ROOT1").unwrap()),
+-            _ => return to_exit_code::<()>(&report, Err(anyhow!("unknown option"))),
++            _ => {
++                return to_exit_code::<()>(
++                    &report,
++                    Err(anyhow!("--thin1 or --root1 not specified")),
++                )
++            }
+         };
+ 
+-        let snap2 = match matches.get_one::<clap::Id>("SNAP2").unwrap().as_str() {
++        let snap2 = match matches
++            .get_one::<clap::Id>("SNAP2")
++            .unwrap_or(&clap::Id::default())
++            .as_str()
++        {
+             "THIN2" => Snap::DeviceId(*matches.get_one::<u64>("THIN2").unwrap()),
+             "ROOT2" => Snap::RootBlock(*matches.get_one::<u64>("ROOT2").unwrap()),
+-            _ => return to_exit_code::<()>(&report, Err(anyhow!("unknown option"))),
++            _ => {
++                return to_exit_code::<()>(
++                    &report,
++                    Err(anyhow!("--thin2 or --root2 not specified")),
++                )
++            }
+         };
+ 
+         let engine_opts = parse_engine_opts(ToolType::Thin, &matches);
+diff --git a/src/commands/thin_dump.rs b/src/commands/thin_dump.rs
+index 96cd8e87..d876066f 100644
+--- a/src/commands/thin_dump.rs
++++ b/src/commands/thin_dump.rs
+@@ -10,6 +10,7 @@ use crate::commands::Command;
+ use crate::report::*;
+ use crate::thin::dump::{dump, OutputFormat, ThinDumpOptions};
+ use crate::thin::metadata_repair::SuperblockOverrides;
++use crate::version::*;
+ 
+ pub struct ThinDumpCommand;
+ 
+@@ -18,6 +19,7 @@ impl ThinDumpCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Dump thin-provisioning metadata to stdout in XML format")
+             .arg(
+                 Arg::new("QUIET")
+@@ -108,7 +110,7 @@ impl ThinDumpCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -119,6 +121,7 @@ impl<'a> Command<'a> for ThinDumpCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = matches.get_one::<String>("OUTPUT").map(Path::new);
+diff --git a/src/commands/thin_explore.rs b/src/commands/thin_explore.rs
+index 79ca6ff2..5b6c7fac 100644
+--- a/src/commands/thin_explore.rs
++++ b/src/commands/thin_explore.rs
+@@ -39,6 +39,7 @@ use crate::pdata::unpack::*;
+ use crate::thin::block_time::*;
+ use crate::thin::device_detail::*;
+ use crate::thin::superblock::*;
++use crate::version::*;
+ 
+ //------------------------------------
+ 
+@@ -879,6 +880,7 @@ impl ThinExploreCommand {
+         clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("A text user interface for examining thin metadata.")
+             .arg(
+                 Arg::new("NODE_PATH")
+@@ -903,6 +905,7 @@ impl<'a> Command<'a> for ThinExploreCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let node_path = matches
+             .get_one::<String>("NODE_PATH")
+diff --git a/src/commands/thin_generate_damage.rs b/src/commands/thin_generate_damage.rs
+index f6d9f47c..080a0325 100644
+--- a/src/commands/thin_generate_damage.rs
++++ b/src/commands/thin_generate_damage.rs
+@@ -5,6 +5,7 @@ use std::process;
+ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::thin::damage_generator::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ use crate::commands::Command;
+@@ -16,6 +17,7 @@ impl ThinGenerateDamageCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("A tool for creating synthetic thin metadata.")
+             .arg(
+                 Arg::new("CREATE_METADATA_LEAKS")
+@@ -92,7 +94,7 @@ impl ThinGenerateDamageCommand {
+                     .args(["MAPPING_ROOT", "DETAILS_ROOT", "METADATA_SNAPSHOT"])
+                     .multiple(true),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -103,6 +105,7 @@ impl<'a> Command<'a> for ThinGenerateDamageCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let report = mk_report(false);
+ 
+diff --git a/src/commands/thin_generate_metadata.rs b/src/commands/thin_generate_metadata.rs
+index 14a59a01..7e445d28 100644
+--- a/src/commands/thin_generate_metadata.rs
++++ b/src/commands/thin_generate_metadata.rs
+@@ -5,6 +5,7 @@ use std::process;
+ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::thin::metadata_generator::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ use crate::commands::Command;
+@@ -16,6 +17,7 @@ impl ThinGenerateMetadataCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("A tool for creating synthetic thin metadata.")
+             // flags
+             .arg(
+@@ -64,7 +66,7 @@ impl ThinGenerateMetadataCommand {
+                     .args(["FORMAT", "SET_NEEDS_CHECK"])
+                     .required(true),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -75,6 +77,7 @@ impl<'a> Command<'a> for ThinGenerateMetadataCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let report = mk_report(false);
+ 
+diff --git a/src/commands/thin_ls.rs b/src/commands/thin_ls.rs
+index 7d778d31..20dcd582 100644
+--- a/src/commands/thin_ls.rs
++++ b/src/commands/thin_ls.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
+ use crate::thin::ls::*;
++use crate::version::*;
+ 
+ pub struct ThinLsCommand;
+ 
+@@ -16,6 +17,7 @@ impl ThinLsCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("List thin volumes within a pool")
+             .arg(
+                 Arg::new("NO_HEADERS")
+@@ -47,7 +49,7 @@ impl ThinLsCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -60,6 +62,7 @@ impl<'a> Command<'a> for ThinLsCommand {
+         use OutputField::*;
+ 
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+diff --git a/src/commands/thin_metadata_pack.rs b/src/commands/thin_metadata_pack.rs
+index 265439c9..be0c7585 100644
+--- a/src/commands/thin_metadata_pack.rs
++++ b/src/commands/thin_metadata_pack.rs
+@@ -6,14 +6,16 @@ use std::path::Path;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::*;
++use crate::version::*;
+ 
+ pub struct ThinMetadataPackCommand;
+ 
+ impl ThinMetadataPackCommand {
+     fn cli(&self) -> clap::Command {
+-        clap::Command::new(self.name())
++        let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Produces a compressed file of thin metadata.  Only packs metadata blocks that are actually used.")
+             // flags
+             .arg(Arg::new("FORCE")
+@@ -33,7 +35,9 @@ impl ThinMetadataPackCommand {
+                 .required(true)
+                 .short('o')
+                 .long("output")
+-                .value_name("FILE"))
++                .value_name("FILE"));
++
++        version_args(cmd)
+     }
+ }
+ 
+@@ -44,6 +48,7 @@ impl<'a> Command<'a> for ThinMetadataPackCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_metadata_size.rs b/src/commands/thin_metadata_size.rs
+index 86f04b3a..b1c18678 100644
+--- a/src/commands/thin_metadata_size.rs
++++ b/src/commands/thin_metadata_size.rs
+@@ -10,6 +10,7 @@ use crate::commands::Command;
+ use crate::report::mk_simple_report;
+ use crate::thin::metadata_size::*;
+ use crate::units::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -39,9 +40,10 @@ pub struct ThinMetadataSizeCommand;
+ 
+ impl ThinMetadataSizeCommand {
+     fn cli(&self) -> clap::Command {
+-        clap::Command::new(self.name())
++        let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Estimate the size of the metadata device needed for a given configuration.")
+             // flags
+             .arg(
+@@ -94,7 +96,9 @@ impl ThinMetadataSizeCommand {
+                     .value_name("UNIT")
+                     .value_parser(value_parser!(Units))
+                     .default_value("sector"),
+-            )
++            );
++
++        version_args(cmd)
+     }
+ 
+     fn parse_args<I, T>(&self, args: I) -> Result<(ThinMetadataSizeOptions, Units, OutputFormat)>
+@@ -103,6 +107,7 @@ impl ThinMetadataSizeCommand {
+         T: Into<OsString> + Clone,
+     {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let pool_size = matches
+             .get_one::<StorageSize>("POOL_SIZE")
+diff --git a/src/commands/thin_metadata_unpack.rs b/src/commands/thin_metadata_unpack.rs
+index 7e383ce3..6fbb8437 100644
+--- a/src/commands/thin_metadata_unpack.rs
++++ b/src/commands/thin_metadata_unpack.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::pack::toplevel::unpack;
+ use crate::report::mk_simple_report;
++use crate::version::*;
+ 
+ pub struct ThinMetadataUnpackCommand;
+ 
+@@ -16,6 +17,7 @@ impl ThinMetadataUnpackCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Unpack a compressed file of thin metadata.")
+             // flags
+             .arg(
+@@ -40,7 +42,7 @@ impl ThinMetadataUnpackCommand {
+                     .short('o')
+                     .value_name("DEV"),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -51,6 +53,7 @@ impl<'a> Command<'a> for ThinMetadataUnpackCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_repair.rs b/src/commands/thin_repair.rs
+index 6f4384cc..5abc5e36 100644
+--- a/src/commands/thin_repair.rs
++++ b/src/commands/thin_repair.rs
+@@ -9,6 +9,7 @@ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
+ use crate::thin::metadata_repair::SuperblockOverrides;
+ use crate::thin::repair::{repair, ThinRepairOptions};
++use crate::version::*;
+ 
+ pub struct ThinRepairCommand;
+ 
+@@ -17,6 +18,7 @@ impl ThinRepairCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Repair thin-provisioning metadata, and write it to different device or file")
+             .arg(
+                 Arg::new("QUIET")
+@@ -66,7 +68,7 @@ impl ThinRepairCommand {
+             // a dummy argument for compatibility with lvconvert
+             .arg(Arg::new("DUMMY").required(false).hide(true).index(1));
+ 
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -77,6 +79,7 @@ impl<'a> Command<'a> for ThinRepairCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_restore.rs b/src/commands/thin_restore.rs
+index feab577a..43becfcb 100644
+--- a/src/commands/thin_restore.rs
++++ b/src/commands/thin_restore.rs
+@@ -9,6 +9,7 @@ use crate::commands::Command;
+ use crate::report::{parse_log_level, verbose_args};
+ use crate::thin::metadata_repair::SuperblockOverrides;
+ use crate::thin::restore::{restore, ThinRestoreOptions};
++use crate::version::*;
+ 
+ pub struct ThinRestoreCommand;
+ 
+@@ -17,6 +18,7 @@ impl ThinRestoreCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Convert XML format metadata to binary.")
+             .arg(
+                 Arg::new("QUIET")
+@@ -63,7 +65,7 @@ impl ThinRestoreCommand {
+                     .value_name("NUM")
+                     .value_parser(value_parser!(u64)),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -74,6 +76,7 @@ impl<'a> Command<'a> for ThinRestoreCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output_file = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_rmap.rs b/src/commands/thin_rmap.rs
+index fef2e36a..109a8a0f 100644
+--- a/src/commands/thin_rmap.rs
++++ b/src/commands/thin_rmap.rs
+@@ -8,6 +8,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::thin::rmap::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ 
+@@ -18,6 +19,7 @@ impl ThinRmapCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Output reverse map of a thin provisioned region of blocks")
+             // options
+             .arg(
+@@ -39,7 +41,7 @@ impl ThinRmapCommand {
+                     .required(true)
+                     .index(1),
+             );
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -50,6 +52,7 @@ impl<'a> Command<'a> for ThinRmapCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+         let input_file = Path::new(matches.get_one::<String>("INPUT").unwrap());
+ 
+         let report = mk_report(false);
+diff --git a/src/commands/thin_shrink.rs b/src/commands/thin_shrink.rs
+index 38783d41..772024cd 100644
+--- a/src/commands/thin_shrink.rs
++++ b/src/commands/thin_shrink.rs
+@@ -13,14 +13,16 @@ use crate::commands::utils::*;
+ use crate::commands::Command;
+ use crate::report::*;
+ use crate::thin::shrink::{shrink, ThinShrinkOptions};
++use crate::version::*;
+ 
+ pub struct ThinShrinkCommand;
+ 
+ impl ThinShrinkCommand {
+     fn cli(&self) -> clap::Command {
+-        clap::Command::new(self.name())
++        let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Rewrite xml metadata and move data in an inactive pool.")
+             .arg(
+                 Arg::new("INPUT")
+@@ -64,7 +66,9 @@ impl ThinShrinkCommand {
+                     .help("Perform binary metadata rebuild rather than XML rewrite")
+                     .long("binary")
+                     .action(ArgAction::SetTrue),
+-            )
++            );
++
++        version_args(cmd)
+     }
+ 
+     fn parse_args<I, T>(&self, args: I) -> io::Result<ThinShrinkOptions>
+@@ -73,6 +77,7 @@ impl ThinShrinkCommand {
+         T: Into<ffi::OsString> + Clone,
+     {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let input = Path::new(matches.get_one::<String>("INPUT").unwrap());
+         let output = Path::new(matches.get_one::<String>("OUTPUT").unwrap());
+diff --git a/src/commands/thin_stat.rs b/src/commands/thin_stat.rs
+index e62e7e8f..62ecb9c6 100644
+--- a/src/commands/thin_stat.rs
++++ b/src/commands/thin_stat.rs
+@@ -5,6 +5,7 @@ use crate::commands::engine::*;
+ use crate::commands::utils::*;
+ use crate::report::mk_simple_report;
+ use crate::thin::stat::*;
++use crate::version::*;
+ 
+ //------------------------------------------
+ use crate::commands::Command;
+@@ -16,6 +17,7 @@ impl ThinStatCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Tool to show metadata statistics")
+             .arg(
+                 Arg::new("OP")
+@@ -30,7 +32,7 @@ impl ThinStatCommand {
+                     .index(1),
+             );
+ 
+-        engine_args(cmd)
++        engine_args(version_args(cmd))
+     }
+ }
+ 
+@@ -41,6 +43,7 @@ impl<'a> Command<'a> for ThinStatCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+         let report = std::sync::Arc::new(mk_simple_report());
+ 
+         let engine_opts = parse_engine_opts(ToolType::Thin, &matches);
+diff --git a/src/commands/thin_trim.rs b/src/commands/thin_trim.rs
+index 9e742e15..79df88dc 100644
+--- a/src/commands/thin_trim.rs
++++ b/src/commands/thin_trim.rs
+@@ -8,6 +8,7 @@ use crate::commands::utils::*;
+ use crate::report::{parse_log_level, verbose_args};
+ use crate::thin::check::{check, ThinCheckOptions};
+ use crate::thin::trim::{trim, ThinTrimOptions};
++use crate::version::*;
+ 
+ //------------------------------------------
+ use crate::commands::Command;
+@@ -19,6 +20,7 @@ impl ThinTrimCommand {
+         let cmd = clap::Command::new(self.name())
+             .next_display_order(None)
+             .version(crate::tools_version!())
++            .disable_version_flag(true)
+             .about("Issue discard requests for free pool space (offline tool).")
+             .arg(
+                 Arg::new("QUIET")
+@@ -42,7 +44,7 @@ impl ThinTrimCommand {
+                     .value_name("FILE")
+                     .required(true),
+             );
+-        verbose_args(engine_args(cmd))
++        verbose_args(engine_args(version_args(cmd)))
+     }
+ }
+ 
+@@ -53,6 +55,7 @@ impl<'a> Command<'a> for ThinTrimCommand {
+ 
+     fn run(&self, args: &mut dyn Iterator<Item = std::ffi::OsString>) -> exitcode::ExitCode {
+         let matches = self.cli().get_matches_from(args);
++        display_version(&matches);
+ 
+         let metadata_dev = Path::new(matches.get_one::<String>("METADATA_DEV").unwrap());
+         let data_dev = Path::new(matches.get_one::<String>("DATA_DEV").unwrap());
+diff --git a/src/version.rs b/src/version.rs
+index af094ef4..bf4e8dda 100644
+--- a/src/version.rs
++++ b/src/version.rs
+@@ -1,6 +1,38 @@
++use clap::ArgMatches;
++use std::io::Write;
++
++//------------------------------------------
++
+ #[macro_export]
+ macro_rules! tools_version {
+     () => {
+         env!("CARGO_PKG_VERSION")
+     };
+ }
++
++pub fn version_args(cmd: clap::Command) -> clap::Command {
++    use clap::Arg;
++
++    cmd.arg(
++        Arg::new("VERSION")
++            .help("Print version")
++            .short('V')
++            .long("version")
++            .exclusive(true)
++            .action(clap::ArgAction::SetTrue),
++    )
++}
++
++pub fn display_version(matches: &ArgMatches) {
++    if matches.get_flag("VERSION") {
++        let mut stdout = std::io::stdout();
++        // ignore broken pipe errors
++        let _ = stdout.write_all(tools_version!().as_bytes());
++        let _ = stdout.write_all(b"\n");
++        let _ = stdout.flush();
++
++        std::process::exit(0);
++    }
++}
++
++//------------------------------------------
+diff --git a/tests/common/common_args.rs b/tests/common/common_args.rs
+index b2da8ead..c5286749 100644
+--- a/tests/common/common_args.rs
++++ b/tests/common/common_args.rs
+@@ -50,7 +50,7 @@ where
+     P: Program<'a>,
+ {
+     let stdout = run_ok(P::cmd(args!["-V"]))?;
+-    assert!(stdout.contains(tools_version!()));
++    assert!(stdout.starts_with(tools_version!()));
+     Ok(())
+ }
+ 
+@@ -59,7 +59,7 @@ where
+     P: Program<'a>,
+ {
+     let stdout = run_ok(P::cmd(args!["--version"]))?;
+-    assert!(stdout.contains(tools_version!()));
++    assert!(stdout.starts_with(tools_version!()));
+     Ok(())
+ }
+ 
+diff --git a/tests/thin_delta.rs b/tests/thin_delta.rs
+index 0732038a..13556bf4 100644
+--- a/tests/thin_delta.rs
++++ b/tests/thin_delta.rs
+@@ -13,7 +13,7 @@ use common::thin::*;
+ 
+ const USAGE: &str = "Print the differences in the mappings between two thin devices
+ 
+-Usage: thin_delta [OPTIONS] <--root1 <BLOCKNR>|--thin1 <DEV_ID>> <--root2 <BLOCKNR>|--thin2 <DEV_ID>> <INPUT>
++Usage: thin_delta [OPTIONS] <INPUT>
+ 
+ Arguments:
+   <INPUT>  Specify the input device
+@@ -71,10 +71,7 @@ fn snap1_unspecified() -> Result<()> {
+     let mut td = TestDir::new()?;
+     let md = mk_valid_md(&mut td)?;
+     let stderr = run_fail(thin_delta_cmd(args!["--snap2", "45", &md]))?;
+-    assert!(stderr.contains(
+-        "the following required arguments were not provided:
+-  <--root1 <BLOCKNR>|--thin1 <DEV_ID>>"
+-    ));
++    assert!(stderr.contains("--thin1 or --root1 not specified"));
+     Ok(())
+ }
+ 
+@@ -83,10 +80,7 @@ fn snap2_unspecified() -> Result<()> {
+     let mut td = TestDir::new()?;
+     let md = mk_valid_md(&mut td)?;
+     let stderr = run_fail(thin_delta_cmd(args!["--snap1", "45", &md]))?;
+-    assert!(stderr.contains(
+-        "the following required arguments were not provided:
+-  <--root2 <BLOCKNR>|--thin2 <DEV_ID>>"
+-    ));
++    assert!(stderr.contains("--thin2 or --root2 not specified"));
+     Ok(())
+ }
+ 
+-- 
+2.43.0
+

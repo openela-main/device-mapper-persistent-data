@@ -1,0 +1,111 @@
+From 96fc598f76beac1deb0c9564dc67416f70ae4ac4 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 30 Jan 2024 15:20:31 +0800
+Subject: [PATCH 5/6] [cache_check] Fix boundary check on the bitset for cached
+ blocks
+
+The bitset for cached block addresses grows dynamically if the metadata
+is not shutdown properly, in which the size hint of the slow (backing)
+device is not available. Fix a bug in determining whether resizing is
+needed (bz2258485).
+
+(cherry picked from commit d2390a50f38d88f0f32b13e59444bbbca7e660b3)
+---
+ src/cache/check.rs   |  6 +++---
+ tests/cache_check.rs | 45 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 48 insertions(+), 3 deletions(-)
+
+diff --git a/src/cache/check.rs b/src/cache/check.rs
+index 18bd51b3..c71d3059 100644
+--- a/src/cache/check.rs
++++ b/src/cache/check.rs
+@@ -19,7 +19,7 @@ use crate::report::*;
+ 
+ //------------------------------------------
+ 
+-// 16m entries is capable for a 1TB cache with 64KB block size
++// 16m entries is capable to address a 1TB device with 64KB block size
+ const DEFAULT_OBLOCKS: usize = 16777216;
+ 
+ fn inc_superblock(sm: &ASpaceMap) -> anyhow::Result<()> {
+@@ -82,7 +82,7 @@ mod format1 {
+             }
+             let mut seen_oblocks = self.seen_oblocks.lock().unwrap();
+ 
+-            if m.oblock as usize > seen_oblocks.len() {
++            if m.oblock as usize >= seen_oblocks.len() {
+                 seen_oblocks.grow(m.oblock as usize + 1);
+             } else if seen_oblocks.contains(m.oblock as usize) {
+                 return Err(array::value_err("origin block already mapped".to_string()));
+@@ -179,7 +179,7 @@ mod format2 {
+                 ));
+             }
+ 
+-            if m.oblock as usize > seen_oblocks.len() {
++            if m.oblock as usize >= seen_oblocks.len() {
+                 seen_oblocks.grow(m.oblock as usize + 1);
+             } else if seen_oblocks.contains(m.oblock as usize) {
+                 return Err(array::value_err("origin block already mapped".to_string()));
+diff --git a/tests/cache_check.rs b/tests/cache_check.rs
+index 81f4c578..8988694a 100644
+--- a/tests/cache_check.rs
++++ b/tests/cache_check.rs
+@@ -11,6 +11,8 @@ use common::program::*;
+ use common::target::*;
+ use common::test_dir::*;
+ 
++use std::io::Write;
++
+ //------------------------------------------
+ 
+ const USAGE: &str = "Validates cache metadata on a device or file.
+@@ -294,3 +296,46 @@ fn no_clear_needs_check_if_error() -> Result<()> {
+ }
+ 
+ //------------------------------------------
++
++fn metadata_without_slow_dev_size_info(use_v1: bool) -> Result<()> {
++    let mut td = TestDir::new()?;
++
++    // The input metadata has a cached oblock with address equals to the default bitset size
++    // boundary (DEFAULT_OBLOCKS = 16777216), triggering bitset resize.
++    let xml = td.mk_path("meta.xml");
++    let mut file = std::fs::File::create(&xml)?;
++    file.write_all(b"<superblock uuid=\"\" block_size=\"128\" nr_cache_blocks=\"1024\" policy=\"smq\" hint_width=\"4\">
++  <mappings>
++    <mapping cache_block=\"0\" origin_block=\"16777216\" dirty=\"false\"/>
++  </mappings>
++  <hints>
++    <hint cache_block=\"0\" data=\"AAAAAA==\"/>
++  </hints>
++</superblock>")?;
++
++    let md = td.mk_path("meta.bin");
++    thinp::file_utils::create_sized_file(&md, 4096 * 4096)?;
++
++    let cache_restore_args = if use_v1 {
++        args!["-i", &xml, "-o", &md, "--metadata-version=1"]
++    } else {
++        args!["-i", &xml, "-o", &md, "--metadata-version=2"]
++    };
++
++    run_ok(cache_restore_cmd(cache_restore_args))?;
++    run_ok(cache_check_cmd(args![&md]))?;
++
++    Ok(())
++}
++
++#[test]
++fn metadata_v1_without_slow_dev_size_info() -> Result<()> {
++    metadata_without_slow_dev_size_info(true)
++}
++
++#[test]
++fn metadata_v2_without_slow_dev_size_info() -> Result<()> {
++    metadata_without_slow_dev_size_info(false)
++}
++
++//------------------------------------------
+-- 
+2.43.0
+

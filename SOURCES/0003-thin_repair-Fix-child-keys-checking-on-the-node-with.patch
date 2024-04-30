@@ -1,0 +1,69 @@
+From add81da22a3998503a6f340350d7e59ed3b52e28 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Wed, 10 Jan 2024 15:56:39 +0800
+Subject: [PATCH 3/6] [thin_repair] Fix child keys checking on the node with a
+ zero key
+
+Fix the issue that keys overlapping between the second and the first
+child nodes indexed by zero not being checked.
+
+(cherry picked from commit 386123bd0f74f7603e993bf3c26aac002162d5db)
+---
+ src/thin/metadata_repair.rs | 27 +++++++++++++++------------
+ 1 file changed, 15 insertions(+), 12 deletions(-)
+
+diff --git a/src/thin/metadata_repair.rs b/src/thin/metadata_repair.rs
+index 9716b1e3..8fece4b9 100644
+--- a/src/thin/metadata_repair.rs
++++ b/src/thin/metadata_repair.rs
+@@ -128,10 +128,11 @@ impl DevInfo {
+     }
+ 
+     fn push_child(&mut self, child: &DevInfo) -> Result<()> {
+-        if self.key_high > 0 && child.key_low <= self.key_high {
+-            return Err(anyhow!("incompatible child"));
+-        }
+-        if !self.pushed {
++        if self.pushed {
++            if child.key_low <= self.key_high {
++                return Err(anyhow!("incompatible child"));
++            }
++        } else {
+             self.key_low = child.key_low;
+             self.pushed = true;
+         }
+@@ -175,10 +176,11 @@ impl MappingsInfo {
+     }
+ 
+     fn push_child(&mut self, child: &MappingsInfo) -> Result<()> {
+-        if self.key_high > 0 && child.key_low <= self.key_high {
+-            return Err(anyhow!("incompatible child"));
+-        }
+-        if !self.pushed {
++        if self.pushed {
++            if child.key_low <= self.key_high {
++                return Err(anyhow!("incompatible child"));
++            }
++        } else {
+             self.key_low = child.key_low;
+             self.pushed = true;
+         }
+@@ -221,10 +223,11 @@ impl DetailsInfo {
+     }
+ 
+     fn push_child(&mut self, child: &DetailsInfo) -> Result<()> {
+-        if self.key_high > 0 && child.key_low <= self.key_high {
+-            return Err(anyhow!("incompatible child"));
+-        }
+-        if !self.pushed {
++        if self.pushed {
++            if child.key_low <= self.key_high {
++                return Err(anyhow!("incompatible child"));
++            }
++        } else {
+             self.key_low = child.key_low;
+             self.pushed = true;
+         }
+-- 
+2.43.0
+

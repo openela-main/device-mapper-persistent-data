@@ -1,0 +1,269 @@
+From 9b948a9639b00fe9226065ca4dd6fd2257cc126c Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Thu, 11 Jan 2024 22:57:36 +0800
+Subject: [PATCH 4/6] [space_map] Allow non-zero values in unused index block
+ entries
+
+Previously, we assumed unused entries in the index block were all
+zero-initialized, leading to issues while loading the block with
+unexpected bytes and a valid checksum [1]. The updated approach loads
+index entries based on actual size information from superblock and
+therefore improves compatibility.
+
+[1] stratis-storage/stratisd#3520
+
+(cherry picked from commit d5fe6a1e1c539a0f260a96eb4d7ed9b83c3f84c9)
+---
+ src/commands/engine.rs                  |  6 ++++-
+ src/pdata/space_map/allocated_blocks.rs | 15 ++++++-----
+ src/pdata/space_map/checker.rs          | 12 ++++++---
+ src/pdata/space_map/metadata.rs         | 22 +++++++++-------
+ src/pdata/space_map/tests.rs            | 35 +++++++++++++++++++++++--
+ src/thin/damage_generator.rs            |  4 +--
+ src/thin/stat.rs                        |  6 +++--
+ 7 files changed, 75 insertions(+), 25 deletions(-)
+
+diff --git a/src/commands/engine.rs b/src/commands/engine.rs
+index 1e752d6e..e8b75301 100644
+--- a/src/commands/engine.rs
++++ b/src/commands/engine.rs
+@@ -137,7 +137,11 @@ fn thin_valid_blocks<P: AsRef<Path>>(path: P, opts: &EngineOptions) -> RoaringBi
+         return all_blocks(e.get_nr_blocks() as u32);
+     }
+     let metadata_root = metadata_root.unwrap();
+-    let valid_blocks = allocated_blocks(e.clone(), metadata_root.bitmap_root);
++    let valid_blocks = allocated_blocks(
++        e.clone(),
++        metadata_root.bitmap_root,
++        metadata_root.nr_blocks,
++    );
+     valid_blocks.unwrap_or_else(|_| all_blocks(e.get_nr_blocks() as u32))
+ }
+ 
+diff --git a/src/pdata/space_map/allocated_blocks.rs b/src/pdata/space_map/allocated_blocks.rs
+index aa75cb7a..71497a76 100644
+--- a/src/pdata/space_map/allocated_blocks.rs
++++ b/src/pdata/space_map/allocated_blocks.rs
+@@ -17,18 +17,21 @@ struct IndexInfo {
+ pub fn allocated_blocks(
+     engine: Arc<dyn IoEngine + Send + Sync>,
+     sm_root: u64,
++    nr_blocks: u64,
+ ) -> Result<RoaringBitmap> {
+     // Walk index tree to find where the bitmaps are.
+     let b = engine.read(sm_root)?;
+-    let (_, indexes) = MetadataIndex::unpack(b.get_data())?;
++    let indexes = load_metadata_index(&b, nr_blocks)?;
+ 
+-    let mut infos = Vec::new();
+-    for (key, entry) in indexes.indexes.iter().enumerate() {
+-        infos.push(IndexInfo {
++    let mut infos: Vec<_> = indexes
++        .indexes
++        .iter()
++        .enumerate()
++        .map(|(key, entry)| IndexInfo {
+             key: key as u64,
+             loc: entry.blocknr,
+-        });
+-    }
++        })
++        .collect();
+ 
+     // Read bitmaps in sequence
+     infos.sort_by(|lhs, rhs| lhs.loc.partial_cmp(&rhs.loc).unwrap());
+diff --git a/src/pdata/space_map/checker.rs b/src/pdata/space_map/checker.rs
+index cfafa79b..7cc8286b 100644
+--- a/src/pdata/space_map/checker.rs
++++ b/src/pdata/space_map/checker.rs
+@@ -194,10 +194,11 @@ fn gather_disk_index_entries(
+ fn gather_metadata_index_entries(
+     engine: Arc<dyn IoEngine + Send + Sync>,
+     bitmap_root: u64,
++    nr_blocks: u64,
+     metadata_sm: ASpaceMap,
+ ) -> Result<Vec<IndexEntry>> {
+     let b = engine.read(bitmap_root)?;
+-    let entries = check_and_unpack_metadata_index(&b)?.indexes;
++    let entries = load_metadata_index(&b, nr_blocks)?.indexes;
+     metadata_sm.lock().unwrap().inc(bitmap_root, 1)?;
+     inc_entries(&metadata_sm, &entries[0..])?;
+ 
+@@ -254,8 +255,13 @@ pub fn check_metadata_space_map(
+         metadata_sm.clone(),
+         false,
+     )?;
+-    let entries =
+-        gather_metadata_index_entries(engine.clone(), root.bitmap_root, metadata_sm.clone())?;
++
++    let entries = gather_metadata_index_entries(
++        engine.clone(),
++        root.bitmap_root,
++        root.nr_blocks,
++        metadata_sm.clone(),
++    )?;
+ 
+     // check overflow ref-counts
+     {
+diff --git a/src/pdata/space_map/metadata.rs b/src/pdata/space_map/metadata.rs
+index b466c135..be232389 100644
+--- a/src/pdata/space_map/metadata.rs
++++ b/src/pdata/space_map/metadata.rs
+@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
+ 
+ use crate::checksum;
+ use crate::io_engine::*;
++use crate::math::div_up;
+ use crate::pdata::space_map::common::*;
+ use crate::pdata::space_map::*;
+ use crate::pdata::unpack::*;
+@@ -32,14 +33,11 @@ impl Unpack for MetadataIndex {
+         let (i, _csum) = le_u32(i)?;
+         let (i, _padding) = le_u32(i)?;
+         let (i, blocknr) = le_u64(i)?;
+-        let (i, indexes) = nom::multi::count(IndexEntry::unpack, MAX_METADATA_BITMAPS)(i)?;
++        let (i, mut indexes) = nom::multi::count(IndexEntry::unpack, MAX_METADATA_BITMAPS)(i)?;
+ 
+-        // Filter out unused entries
+-        let indexes: Vec<IndexEntry> = indexes
+-            .iter()
+-            .take_while(|e| e.blocknr != 0)
+-            .cloned()
+-            .collect();
++        // Drop unused entries that point to block 0
++        let nr_bitmaps = indexes.iter().take_while(|e| e.blocknr != 0).count();
++        indexes.truncate(nr_bitmaps);
+ 
+         Ok((i, MetadataIndex { blocknr, indexes }))
+     }
+@@ -69,9 +67,15 @@ fn verify_checksum(b: &Block) -> Result<()> {
+     }
+ }
+ 
+-pub fn check_and_unpack_metadata_index(b: &Block) -> Result<MetadataIndex> {
++pub fn load_metadata_index(b: &Block, nr_blocks: u64) -> Result<MetadataIndex> {
+     verify_checksum(b)?;
+-    unpack::<MetadataIndex>(b.get_data()).map_err(|e| e.into())
++    let mut entries = unpack::<MetadataIndex>(b.get_data())?;
++    if entries.blocknr != b.loc {
++        return Err(anyhow!("blocknr mismatch"));
++    }
++    let nr_bitmaps = div_up(nr_blocks, ENTRIES_PER_BITMAP as u64) as usize;
++    entries.indexes.truncate(nr_bitmaps);
++    Ok(entries)
+ }
+ 
+ //------------------------------------------
+diff --git a/src/pdata/space_map/tests.rs b/src/pdata/space_map/tests.rs
+index fb08a9dc..fa118189 100644
+--- a/src/pdata/space_map/tests.rs
++++ b/src/pdata/space_map/tests.rs
+@@ -171,10 +171,11 @@ mod metadata_sm {
+         let mut w = WriteBatcher::new(engine.clone(), meta_sm.clone(), engine.get_batch_size());
+         w.alloc()?; // reserved for the superblock
+         let root = write_metadata_sm(&mut w)?;
++        drop(w);
+ 
+         let b = engine.read(root.bitmap_root)?;
+-        let entries = check_and_unpack_metadata_index(&b)?.indexes;
+-        ensure!(entries.len() as u64 == div_up(nr_blocks, ENTRIES_PER_BITMAP as u64));
++        let entries = load_metadata_index(&b, root.nr_blocks)?.indexes;
++        ensure!(entries.len() == div_up(nr_blocks, ENTRIES_PER_BITMAP as u64) as usize);
+ 
+         // the number of blocks observed by index_entries must be multiple of ENTRIES_PER_BITMAP
+         let nr_allocated = meta_sm.lock().unwrap().get_nr_allocated()?;
+@@ -193,6 +194,35 @@ mod metadata_sm {
+     fn check_multiple_index_entries() -> Result<()> {
+         check_index_entries(ENTRIES_PER_BITMAP as u64 * 16 + 1000)
+     }
++
++    #[test]
++    fn ignore_junk_bytes_in_index_block() -> Result<()> {
++        use crate::checksum;
++        use crate::pdata::space_map::common::IndexEntry;
++        use crate::pdata::unpack::Unpack;
++
++        let nr_blocks = ENTRIES_PER_BITMAP as u64 * 4 + 1000;
++        let nr_bitmaps = div_up(nr_blocks, ENTRIES_PER_BITMAP as u64) as usize;
++        let engine = Arc::new(CoreIoEngine::new(nr_blocks));
++        let meta_sm = core_metadata_sm(engine.get_nr_blocks(), u32::MAX);
++
++        let mut w = WriteBatcher::new(engine.clone(), meta_sm.clone(), engine.get_batch_size());
++        w.alloc()?; // reserved for the superblock
++        let root = write_metadata_sm(&mut w)?;
++
++        // append junk bytes to the unused entry
++        let index_block = w.read(root.bitmap_root)?;
++        index_block.get_data()[nr_bitmaps * IndexEntry::disk_size() as usize + 16] = 1;
++        w.write(index_block, checksum::BT::INDEX)?;
++        w.flush()?;
++        drop(w);
++
++        let b = engine.read(root.bitmap_root)?;
++        let entries = load_metadata_index(&b, root.nr_blocks)?.indexes;
++        ensure!(entries.len() == nr_bitmaps);
++
++        Ok(())
++    }
+ }
+ 
+ //------------------------------------------
+@@ -223,6 +253,7 @@ mod disk_sm {
+         data_sm.lock().unwrap().inc(0, 100)?;
+ 
+         let root = write_disk_sm(&mut w, data_sm.lock().unwrap().deref())?;
++        drop(w);
+ 
+         let entries =
+             btree_to_value_vec::<IndexEntry>(&mut Vec::new(), engine, false, root.bitmap_root)?;
+diff --git a/src/thin/damage_generator.rs b/src/thin/damage_generator.rs
+index 56685d4d..df1be4cd 100644
+--- a/src/thin/damage_generator.rs
++++ b/src/thin/damage_generator.rs
+@@ -23,7 +23,7 @@ fn find_blocks_of_rc(
+     let mut found = Vec::<u64>::new();
+     if ref_count < 3 {
+         let b = engine.read(sm_root.bitmap_root)?;
+-        let entries = check_and_unpack_metadata_index(&b)?.indexes;
++        let entries = load_metadata_index(&b, sm_root.nr_blocks)?.indexes;
+         let bitmaps: Vec<u64> = entries.iter().map(|ie| ie.blocknr).collect();
+         let nr_bitmaps = bitmaps.len();
+ 
+@@ -75,7 +75,7 @@ fn adjust_bitmap_entries(
+     };
+ 
+     let index_block = engine.read(sm_root.bitmap_root)?;
+-    let entries = check_and_unpack_metadata_index(&index_block)?.indexes;
++    let entries = load_metadata_index(&index_block, sm_root.nr_blocks)?.indexes;
+ 
+     let bi = blocks_to_bitmaps(blocks);
+     let bitmaps: Vec<u64> = bi.iter().map(|i| entries[*i].blocknr).collect();
+diff --git a/src/thin/stat.rs b/src/thin/stat.rs
+index 03ae6845..c6f2bf44 100644
+--- a/src/thin/stat.rs
++++ b/src/thin/stat.rs
+@@ -72,9 +72,10 @@ fn gather_btree_index_entries(
+ fn gather_metadata_index_entries(
+     engine: Arc<dyn IoEngine + Send + Sync>,
+     bitmap_root: u64,
++    nr_blocks: u64,
+ ) -> Result<Vec<IndexEntry>> {
+     let b = engine.read(bitmap_root)?;
+-    let entries = check_and_unpack_metadata_index(&b)?.indexes;
++    let entries = load_metadata_index(&b, nr_blocks)?.indexes;
+     Ok(entries)
+ }
+ 
+@@ -152,7 +153,8 @@ fn stat_metadata_block_ref_counts(
+ ) -> Result<BTreeMap<u32, u64>> {
+     let mut histogram = BTreeMap::<u32, u64>::new();
+ 
+-    let index_entries = gather_metadata_index_entries(engine.clone(), root.bitmap_root)?;
++    let index_entries =
++        gather_metadata_index_entries(engine.clone(), root.bitmap_root, root.nr_blocks)?;
+     stat_low_ref_counts(engine.clone(), &index_entries, &mut histogram)?;
+ 
+     let histogram = stat_overflow_ref_counts(engine, root.ref_count_root, histogram)?;
+-- 
+2.43.0
+

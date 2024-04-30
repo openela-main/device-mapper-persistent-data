@@ -1,0 +1,181 @@
+From f088ce90f5f7934489a8d1062ebfd3d23e4aec38 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Tue, 12 Dec 2023 14:25:27 +0800
+Subject: [PATCH 2/6] [space map] Fix incorrect index_entry.nr_free while
+ expansion
+
+Do not truncate the nr_free value of the last index_entry to the space
+map boundary, to address the issue in kernel that sm_ll_extend() doesn't
+extend the nr_free value of the last index_entry while expanding the
+space map. Without this fix, we'll have incorrect free space estimation
+in later block allocations, leading to under-utilized space maps.
+
+(cherry picked from commit 9a405f57c591020321fc16f00efdb5197e1df2c0)
+---
+ src/pdata/space_map/common.rs | 20 +++++---
+ src/pdata/space_map/tests.rs  | 96 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 108 insertions(+), 8 deletions(-)
+
+diff --git a/src/pdata/space_map/common.rs b/src/pdata/space_map/common.rs
+index d92b8115..4be9c303 100644
+--- a/src/pdata/space_map/common.rs
++++ b/src/pdata/space_map/common.rs
+@@ -211,22 +211,28 @@ pub fn write_common(
+         let len = std::cmp::min(nr_blocks - begin, ENTRIES_PER_BITMAP as u64);
+         let mut entries = Vec::with_capacity(ENTRIES_PER_BITMAP);
+         let mut first_free: Option<u32> = None;
+-        let mut nr_free: u32 = 0;
++        let mut nr_free = ENTRIES_PER_BITMAP as u32; // do not truncate to the sm size boundary
+ 
+         for i in 0..len {
+             let b = begin + i;
+             let rc = sm.get(b)?;
+             let e = match rc {
+                 0 => {
+-                    nr_free += 1;
+                     if first_free.is_none() {
+                         first_free = Some(i as u32);
+                     }
+                     Small(0)
+                 }
+-                1 => Small(1),
+-                2 => Small(2),
++                1 => {
++                    nr_free -= 1;
++                    Small(1)
++                }
++                2 => {
++                    nr_free -= 1;
++                    Small(2)
++                }
+                 _ => {
++                    nr_free -= 1;
+                     overflow_builder.push_value(w, b, rc)?;
+                     Overflow
+                 }
+@@ -334,16 +340,14 @@ pub fn write_metadata_common(w: &mut WriteBatcher) -> anyhow::Result<(Vec<IndexE
+     let nr_blocks = w.sm.lock().unwrap().get_nr_blocks()?;
+     let nr_bitmaps = div_up(nr_blocks, ENTRIES_PER_BITMAP as u64) as usize;
+     let nr_used_bitmaps = index_entries.len();
+-    for bm in nr_used_bitmaps..nr_bitmaps {
+-        let begin = bm as u64 * ENTRIES_PER_BITMAP as u64;
+-        let len = std::cmp::min(nr_blocks - begin, ENTRIES_PER_BITMAP as u64);
++    for _bm in nr_used_bitmaps..nr_bitmaps {
+         let entries = vec![BitmapEntry::Small(0); ENTRIES_PER_BITMAP];
+         let blocknr = write_bitmap(w, entries)?;
+ 
+         // Insert into the index list
+         let ie = IndexEntry {
+             blocknr,
+-            nr_free: len as u32,
++            nr_free: ENTRIES_PER_BITMAP as u32, // do not truncate to the sm size boundary
+             none_free_before: 0,
+         };
+         index_entries.push(ie);
+diff --git a/src/pdata/space_map/tests.rs b/src/pdata/space_map/tests.rs
+index 26d7834d..fb08a9dc 100644
+--- a/src/pdata/space_map/tests.rs
++++ b/src/pdata/space_map/tests.rs
+@@ -152,3 +152,99 @@ mod core_sm_u8 {
+ }
+ 
+ //------------------------------------------
++
++mod metadata_sm {
++    use anyhow::{ensure, Result};
++    use std::sync::Arc;
++
++    use crate::io_engine::core::CoreIoEngine;
++    use crate::io_engine::*;
++    use crate::math::div_up;
++    use crate::pdata::space_map::common::ENTRIES_PER_BITMAP;
++    use crate::pdata::space_map::metadata::*;
++    use crate::write_batcher::WriteBatcher;
++
++    fn check_index_entries(nr_blocks: u64) -> Result<()> {
++        let engine = Arc::new(CoreIoEngine::new(nr_blocks));
++        let meta_sm = core_metadata_sm(engine.get_nr_blocks(), u32::MAX);
++
++        let mut w = WriteBatcher::new(engine.clone(), meta_sm.clone(), engine.get_batch_size());
++        w.alloc()?; // reserved for the superblock
++        let root = write_metadata_sm(&mut w)?;
++
++        let b = engine.read(root.bitmap_root)?;
++        let entries = check_and_unpack_metadata_index(&b)?.indexes;
++        ensure!(entries.len() as u64 == div_up(nr_blocks, ENTRIES_PER_BITMAP as u64));
++
++        // the number of blocks observed by index_entries must be multiple of ENTRIES_PER_BITMAP
++        let nr_allocated = meta_sm.lock().unwrap().get_nr_allocated()?;
++        let nr_free: u64 = entries.iter().map(|ie| ie.nr_free as u64).sum();
++        ensure!(nr_allocated + nr_free == (entries.len() * ENTRIES_PER_BITMAP) as u64);
++
++        Ok(())
++    }
++
++    #[test]
++    fn check_single_index_entry() -> Result<()> {
++        check_index_entries(1000)
++    }
++
++    #[test]
++    fn check_multiple_index_entries() -> Result<()> {
++        check_index_entries(ENTRIES_PER_BITMAP as u64 * 16 + 1000)
++    }
++}
++
++//------------------------------------------
++
++mod disk_sm {
++    use anyhow::{ensure, Result};
++    use std::ops::Deref;
++    use std::sync::Arc;
++
++    use crate::io_engine::core::CoreIoEngine;
++    use crate::io_engine::*;
++    use crate::math::div_up;
++    use crate::pdata::btree_walker::btree_to_value_vec;
++    use crate::pdata::space_map::common::{IndexEntry, ENTRIES_PER_BITMAP};
++    use crate::pdata::space_map::disk::*;
++    use crate::pdata::space_map::metadata::*;
++    use crate::pdata::space_map::*;
++    use crate::write_batcher::WriteBatcher;
++
++    fn check_index_entries(nr_blocks: u64) -> Result<()> {
++        let engine = Arc::new(CoreIoEngine::new(1024));
++        let meta_sm = core_metadata_sm(engine.get_nr_blocks(), u32::MAX);
++
++        let mut w = WriteBatcher::new(engine.clone(), meta_sm.clone(), engine.get_batch_size());
++        w.alloc()?; // reserved for the superblock
++
++        let data_sm = core_sm(nr_blocks, u32::MAX);
++        data_sm.lock().unwrap().inc(0, 100)?;
++
++        let root = write_disk_sm(&mut w, data_sm.lock().unwrap().deref())?;
++
++        let entries =
++            btree_to_value_vec::<IndexEntry>(&mut Vec::new(), engine, false, root.bitmap_root)?;
++        ensure!(entries.len() as u64 == div_up(nr_blocks, ENTRIES_PER_BITMAP as u64));
++
++        // the number of blocks observed by index_entries must be a multiple of ENTRIES_PER_BITMAP
++        let nr_allocated = data_sm.lock().unwrap().get_nr_allocated()?;
++        let nr_free: u64 = entries.iter().map(|ie| ie.nr_free as u64).sum();
++        ensure!(nr_allocated + nr_free == (entries.len() * ENTRIES_PER_BITMAP) as u64);
++
++        Ok(())
++    }
++
++    #[test]
++    fn check_single_index_entry() -> Result<()> {
++        check_index_entries(1000)
++    }
++
++    #[test]
++    fn check_multiple_index_entries() -> Result<()> {
++        check_index_entries(ENTRIES_PER_BITMAP as u64 * 16 + 1000)
++    }
++}
++
++//------------------------------------------
+-- 
+2.43.0
+

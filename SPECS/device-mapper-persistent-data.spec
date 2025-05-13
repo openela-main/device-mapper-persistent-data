@@ -2,38 +2,36 @@
 # Copyright (C) 2011-2017 Red Hat, Inc
 #
 %bcond_without check
-%global debug_package %{nil}
+#%%global debug_package %%{nil}
 
 #%%global version_suffix -rc2
 #%%global release_suffix .test3
 
 Summary: Device-mapper Persistent Data Tools
 Name: device-mapper-persistent-data
-Version: 1.0.9
-Release: 3%{?dist}%{?release_suffix}
-License: GPLv3+
+Version: 1.1.0
+Release: 1%{?dist}%{?release_suffix}
+License: GPL-3.0-only AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND (Zlib OR Apache-2.0 OR MIT)
 URL: https://github.com/jthornber/thin-provisioning-tools
 #Source0: https://github.com/jthornber/thin-provisioning-tools/archive/thin-provisioning-tools-%%{version}.tar.gz
 Source0: https://github.com/jthornber/thin-provisioning-tools/archive/v%{version}%{?version_suffix}.tar.gz
-Source1: dmpd109-vendor.tar.gz
+Source1: dmpd110-vendor.tar.gz
 Patch1: 0001-Tweak-cargo.toml-to-work-with-vendor-directory.patch
-Patch2: 0002-space-map-Fix-incorrect-index_entry.nr_free-while-ex.patch
-Patch3: 0003-thin_repair-Fix-child-keys-checking-on-the-node-with.patch
-Patch4: 0004-space_map-Allow-non-zero-values-in-unused-index-bloc.patch
-Patch5: 0005-cache_check-Fix-boundary-check-on-the-bitset-for-cac.patch
-Patch6: 0006-thin-cache_check-Print-suggestive-hints-for-improvin.patch
-# RHEL-26521:
-Patch7: 0007-thin_dump-Do-not-print-error-messages-on-BrokenPipe-.patch
-# RHEL-26520:
-Patch8: 0008-thin_metadata_pack-Allow-long-format-for-input-and-o.patch
-Patch9: 0009-commands-Fix-version-string-compatibility-issue-with.patch
-# RHEL-26521:
-Patch10: 0010-thin_dump-Do-not-print-error-messages-on-BrokenPipe-.patch
 
+%if %{defined rhel}
+BuildRequires: rust-toolset
+%else
 BuildRequires: rust-packaging
+%endif
 BuildRequires: rust >= 1.35
 BuildRequires: cargo
 BuildRequires: make
+BuildRequires: systemd-devel
+BuildRequires: clang-libs
+BuildRequires: glibc-static
+BuildRequires: device-mapper-devel
+BuildRequires: clang
+#BuildRequires: gcc
 
 %description
 thin-provisioning-tools contains check,dump,restore,repair,rmap
@@ -48,15 +46,53 @@ snapshot eras
 #%%cargo_prep
 #%%cargo_generate_buildrequires
 tar xf %{SOURCE1}
-mkdir -p .cargo
-cat > .cargo/config <<END
-[source.crates-io]
-replace-with = "vendored-sources"
+(
+# Part from %%cargo_prep:
+set -euo pipefail
+%{__mkdir} -p target/rpm
+/usr/bin/ln -s rpm target/release
+%{__rm} -rf .cargo/
+%{__mkdir} -p .cargo
+cat > .cargo/config.toml << EOF
+[build]
+rustc = "%{__rustc}"
+rustdoc = "%{__rustdoc}"
 
+[profile.rpm]
+inherits = "release"
+opt-level = 3 # %%{rustflags_opt_level}
+codegen-units = 1 # %%{rustflags_codegen_units}
+debug = 2 # %%{rustflags_debuginfo}
+strip = "none"
+
+[env]
+CFLAGS = "%{build_cflags}"
+CXXFLAGS = "%{build_cxxflags}"
+LDFLAGS = "%{build_ldflags}"
+
+[install]
+root = "%{buildroot}%{_prefix}"
+
+[term]
+verbose = true
+
+[net]
+offline = true
+
+EOF
+cat >> .cargo/config.toml << EOF
 [source.vendored-sources]
 directory = "vendor"
 
-END
+[source.crates-io]
+registry = "https://crates.io"
+replace-with = "vendored-sources"
+
+EOF
+%{__rm} -f Cargo.toml.orig
+cat .cargo/config.toml
+)
+
 echo %{version}-%{release} > VERSION
 
 %generate_buildrequires
@@ -73,10 +109,10 @@ RUST_BACKTRACE=1 %%cargo_test -- --nocapture --test-threads=1 || true
 %endif
 
 %install
-make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
+%make_install  MANDIR=%{_mandir} STRIP=true
 
 %files
-%doc COPYING README.md
+%doc COPYING README.md CHANGES
 %{_mandir}/man8/cache_check.8.gz
 %{_mandir}/man8/cache_dump.8.gz
 %{_mandir}/man8/cache_metadata_size.8.gz
@@ -92,6 +128,7 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
 %{_mandir}/man8/thin_dump.8.gz
 %{_mandir}/man8/thin_ls.8.gz
 %{_mandir}/man8/thin_metadata_size.8.gz
+%{_mandir}/man8/thin_migrate.8.gz
 %{_mandir}/man8/thin_repair.8.gz
 %{_mandir}/man8/thin_restore.8.gz
 %{_mandir}/man8/thin_rmap.8.gz
@@ -114,6 +151,7 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
 %{_sbindir}/thin_dump
 %{_sbindir}/thin_ls
 %{_sbindir}/thin_metadata_size
+%{_sbindir}/thin_migrate
 %{_sbindir}/thin_repair
 %{_sbindir}/thin_restore
 %{_sbindir}/thin_rmap
@@ -123,6 +161,12 @@ make DESTDIR=%{buildroot} MANDIR=%{_mandir} install
 #% {_sbindir}/thin_show_duplicates
 
 %changelog
+* Fri Oct 11 2024 Marian Csontos <mcsontos@redhat.com> - 1.1.0-1
+- Update to latest upstream release 1.1.0.
+- Support listing the highest mapped block in thin_ls.
+- Introduce thin_migrate for volume migration.
+- See CHANGES.
+
 * Mon Mar 04 2024 Marian Csontos <mcsontos@redhat.com> - 1.0.9-3
 - Fix --version string compatibility with LVM tools.
 - Fix confusing Broken pipe warning when used in lvconvert --repair.

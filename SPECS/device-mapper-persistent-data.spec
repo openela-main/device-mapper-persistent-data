@@ -4,21 +4,21 @@
 %bcond_without check
 #%%global debug_package %%{nil}
 
-#%%global version_suffix -rc2
+#%%global version_suffix -rc1
 #%%global release_suffix .test3
 
 Summary: Device-mapper Persistent Data Tools
 Name: device-mapper-persistent-data
-Version: 1.1.0
-Release: 2%{?dist}%{?release_suffix}
+Version: 1.3.0
+Release: 1%{?dist}%{?release_suffix}
 License: GPL-3.0-only AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND BSD-3-Clause AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Zlib OR Apache-2.0) AND (Unlicense OR MIT) AND (Zlib OR Apache-2.0 OR MIT)
 
 #ExcludeArch: %%{ix86}
 URL: https://github.com/jthornber/thin-provisioning-tools
 #Source0: https://github.com/jthornber/thin-provisioning-tools/archive/thin-provisioning-tools-%%{version}.tar.gz
 Source0: https://github.com/jthornber/thin-provisioning-tools/archive/v%{version}%{?version_suffix}.tar.gz
-Source1: dmpd110-vendor.tar.gz
-Patch1: 0001-Tweak-cargo.toml-to-work-with-vendor-directory.patch
+Source1: dmpd130-vendor.tar.gz
+#Patch1: 0001-Tweak-cargo.toml-to-work-with-vendor-directory.patch
 
 %if %{defined rhel}
 BuildRequires: rust-toolset
@@ -122,6 +122,9 @@ echo %{version}-%{release} > VERSION
 #% {_sbindir}/thin_show_duplicates
 
 %changelog
+* Wed Oct 22 2025 Marian Csontos <mcsontos@redhat.com> - 1.3.0-1
+- Update to upstream release 1.3.0.
+
 * Thu Oct 31 2024 Marian Csontos <mcsontos@redhat.com> - 1.1.0-2
 - Add gating.yaml
 

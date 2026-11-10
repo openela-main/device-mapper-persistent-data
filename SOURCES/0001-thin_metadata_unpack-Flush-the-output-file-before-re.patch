@@ -1,0 +1,36 @@
+From 357749ad453beac21d4b91bf5c29b8deb797b593 Mon Sep 17 00:00:00 2001
+From: Ming-Hung Tsai <mtsai@redhat.com>
+Date: Fri, 8 May 2026 00:24:46 +0800
+Subject: [PATCH] [thin_metadata_unpack] Flush the output file before returning
+
+thin_metadata_unpack writes blocks via buffered IO, leaving dirty pages
+unflushed. While the O_DIRECT read path flushes those pages implicitly
+via filemap_write_and_wait_range(), this has proven unreliable on
+weakly-ordered architectures under CI load (aarch64 and ppc64le),
+resulting in intermittent checksum failures on subsequent O_DIRECT
+reads.
+
+Fix by calling sync_all() before returning, ensuring all dirty pages reach
+the storage device before handing the file to subsequent processes
+
+(cherry picked from commit 629ea19837d97c53417e25bcbb7eed0219601358)
+---
+ src/pack/toplevel.rs | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/pack/toplevel.rs b/src/pack/toplevel.rs
+index 5cda9344..70324b62 100644
+--- a/src/pack/toplevel.rs
++++ b/src/pack/toplevel.rs
+@@ -309,5 +309,8 @@ pub fn unpack(input_file: &Path, output_file: &Path) -> Result<()> {
+     for t in threads {
+         t.join().unwrap()?;
+     }
++
++    output.lock().unwrap().sync_all()?;
++
+     Ok(())
+ }
+-- 
+2.54.0
+
